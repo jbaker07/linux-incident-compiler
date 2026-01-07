@@ -12,16 +12,21 @@ env:
 
 jobs:
   build-and-test:
-    runs-on: windows-latest
-    
+    runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libelf-dev libbpf-dev
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -32,183 +37,143 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-      
+
       - name: Check formatting
         run: cargo fmt --all -- --check
-      
+
       - name: Run clippy (core)
         run: cargo clippy --workspace --all-targets -- -D warnings
-      
+
       - name: Run clippy (pro)
         run: cargo clippy --workspace --all-targets --features pro -- -D warnings
-      
+
       - name: Build release (core)
         run: cargo build --release --workspace
-      
+
       - name: Build release (pro)
         run: cargo build --release --workspace --features pro
-      
+
+      - name: Build agent-linux with eBPF
+        run: cargo build --release -p agent-linux --features with-ebpf
+
       - name: Run tests (core)
         run: cargo test --workspace
-      
+
       - name: Run tests (pro)
         run: cargo test --workspace --features pro
-      
-  # Optional: Linux build for cross-platform validation
-  build-linux:
-    runs-on: ubuntu-latest
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-      
-      - name: Build (Linux crates only)
-        run: cargo build --release -p edr-core -p edr-locald -p workbench
-      
-      - name: Run tests (Linux crates)
-        run: cargo test -p edr-core -p edr-locald -p workbench
 
   # Security: Verify binaries don't contain sensitive material
   security-scan:
     name: Security Scan
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     needs: build-and-test
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Build release binaries
         run: cargo build --workspace --release
-      
+
       - name: Scan binaries for sensitive strings
-        shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          
-          $SHIPPING_BINARIES = @(
-            "target/release/edr-server.exe",
-            "target/release/edr-locald.exe",
-            "target/release/capture_windows_rotating.exe"
+          set -e
+
+          SHIPPING_BINARIES=(
+            "target/release/edr-server"
+            "target/release/edr-locald"
+            "target/release/capture_linux_rotating"
           )
-          
+
           # Patterns that should NEVER appear in shipping binaries
-          $FORBIDDEN_PATTERNS = @(
-            "SigningKey",
-            "PRIVATE_KEY",
-            "EDR_LICENSE_PRIVATE_KEY",
-            "-----BEGIN PRIVATE KEY-----",
+          FORBIDDEN_PATTERNS=(
+            "SigningKey"
+            "PRIVATE_KEY"
+            "EDR_LICENSE_PRIVATE_KEY"
+            "-----BEGIN PRIVATE KEY-----"
             "ed25519_secret"
           )
-          
-          Write-Host "=== Security Scan: Checking binaries for sensitive strings ==="
-          $violations = @()
-          
-          foreach ($bin in $SHIPPING_BINARIES) {
-            if (!(Test-Path $bin)) {
-              Write-Host "  ⚠ Skipping (not found): $bin"
+
+          echo "=== Security Scan: Checking binaries for sensitive strings ==="
+          violations=0
+
+          for bin in "${SHIPPING_BINARIES[@]}"; do
+            if [ ! -f "$bin" ]; then
+              echo "  ⚠ Skipping (not found): $bin"
               continue
-            }
-            
-            Write-Host "  Scanning: $bin"
-            $content = [System.IO.File]::ReadAllText($bin, [System.Text.Encoding]::ASCII)
-            
-            foreach ($pattern in $FORBIDDEN_PATTERNS) {
-              if ($content -match $pattern) {
-                $violations += "VIOLATION: Found '$pattern' in $bin"
-                Write-Host "    ✗ Found forbidden pattern: $pattern" -ForegroundColor Red
-              }
-            }
-          }
-          
-          if ($violations.Count -gt 0) {
-            Write-Host ""
-            Write-Host "=== SECURITY VIOLATIONS ===" -ForegroundColor Red
-            $violations | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+            fi
+
+            echo "  Scanning: $bin"
+            for pattern in "${FORBIDDEN_PATTERNS[@]}"; do
+              if strings "$bin" | grep -q "$pattern"; then
+                echo "    ✗ Found forbidden pattern: $pattern"
+                violations=$((violations + 1))
+              fi
+            done
+          done
+
+          if [ $violations -gt 0 ]; then
+            echo ""
+            echo "=== SECURITY VIOLATIONS ==="
             exit 1
-          }
-          
-          Write-Host ""
-          Write-Host "✓ Security scan passed - no sensitive strings found" -ForegroundColor Green
+          fi
+
+          echo ""
+          echo "✓ Security scan passed - no sensitive strings found"
 
   # Verify artifact allowlist
   artifact-allowlist:
     name: Verify Artifact Allowlist
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     needs: build-and-test
-    
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Build release binaries
         run: cargo build --workspace --release
-      
+
       - name: Verify artifact allowlist
-        shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          
+          set -e
+
           # Load canonical allowlist (single source of truth)
-          $allowlistPath = Join-Path $PWD "packaging" "allowlist.json"
-          if (-not (Test-Path $allowlistPath)) {
-            Write-Error "FATAL: packaging/allowlist.json not found!"
+          allowlist_path="packaging/allowlist.json"
+          if [ ! -f "$allowlist_path" ]; then
+            echo "FATAL: packaging/allowlist.json not found!"
             exit 1
-          }
-          $allowlist = Get-Content $allowlistPath | ConvertFrom-Json
-          
-          $ALLOWED_BINARIES = $allowlist.allowed_binaries
-          $FORBIDDEN_BINARIES = $allowlist.forbidden_binaries
-          
-          Write-Host "=== Artifact Allowlist Verification ==="
-          Write-Host "Source: packaging/allowlist.json"
-          Write-Host ""
-          
+          fi
+
+          echo "=== Artifact Allowlist Verification ==="
+          echo "Source: packaging/allowlist.json"
+          echo ""
+
           # Check allowed binaries exist
-          Write-Host "Checking required binaries..."
-          foreach ($bin in $ALLOWED_BINARIES) {
-            $path = Join-Path "target/release" $bin
-            if (Test-Path $path) {
-              Write-Host "  ✓ Found: $bin" -ForegroundColor Green
-            } else {
-              Write-Host "  ✗ MISSING: $bin" -ForegroundColor Red
+          echo "Checking required binaries..."
+          for bin in $(jq -r '.allowed_binaries[]' "$allowlist_path"); do
+            path="target/release/$bin"
+            if [ -f "$path" ]; then
+              echo "  ✓ Found: $bin"
+            else
+              echo "  ✗ MISSING: $bin"
               exit 1
-            }
-          }
-          
-          # Check forbidden binaries exist (should be built but NOT shipped)
-          Write-Host ""
-          Write-Host "Verifying forbidden binaries exist (to ensure we'd catch them if shipped)..."
-          foreach ($forbidden in $FORBIDDEN_BINARIES) {
-            $path = Join-Path "target/release" $forbidden
-            if (Test-Path $path) {
-              Write-Host "  ⚠ Built (correctly excluded from shipping): $forbidden" -ForegroundColor Yellow
-            }
-          }
-          
-          # Special check: license_gen MUST be built (it's the vendor tool)
-          $licenseGenPath = Join-Path "target/release" "license_gen.exe"
-          if (!(Test-Path $licenseGenPath)) {
-            Write-Host ""
-            Write-Host "✗ WARNING: license_gen.exe not built - vendor tool missing" -ForegroundColor Yellow
-          }
-          
-          Write-Host ""
-          Write-Host "✓ Artifact allowlist verification passed" -ForegroundColor Green
+            fi
+          done
+
+          # Check forbidden binaries (should NOT be shipped)
+          echo ""
+          echo "Verifying forbidden binaries..."
+          for forbidden in $(jq -r '.forbidden_binaries[]' "$allowlist_path"); do
+            path="target/release/$forbidden"
+            if [ -f "$path" ]; then
+              echo "  ⚠ Built (correctly excluded from shipping): $forbidden"
+            fi
+          done
+
+          echo ""
+          echo "✓ Artifact allowlist verification passed"
