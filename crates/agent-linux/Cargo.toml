@@ -3,6 +3,7 @@ name = "agent-linux"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Linux eBPF capture agent for incident compilation"
 
 [[bin]]
 name = "capture_linux_rotating"
@@ -21,6 +22,11 @@ anyhow.workspace = true
 sha2.workspace = true
 hex.workspace = true
 flate2.workspace = true
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4.4", features = ["derive"] }
+ctrlc = "3.4"
+tempfile = "3.10"
 
 # Linux-specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -29,6 +35,14 @@ libc = "0.2"
 nix = { version = "0.27", features = ["user", "process", "signal"] }
 procfs = "0.16"
 
+# Unix dependencies (includes macOS for development)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 default = []
-ebpf = ["libbpf-rs"]
+with-ebpf = ["libbpf-rs"]
+with-ebpf-load = ["with-ebpf"]
+
+[dev-dependencies]
+tempfile = "3.10"

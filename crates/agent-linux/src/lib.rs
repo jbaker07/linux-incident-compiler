@@ -8,15 +8,12 @@
 //! Writes events to the standard run contract format for consumption
 //! by edr-locald and edr-server.
 
-pub mod capture_linux_rotating;
-pub mod event_builders;
+pub mod capture;
 pub mod host;
 
 #[cfg(target_os = "linux")]
 pub mod ebpf;
 
-#[cfg(target_os = "linux")]
-pub mod sensors;
-
-#[cfg(target_os = "linux")]
-pub mod sensors_v2;
+// Re-exports
+pub use capture::{CaptureConfig, CaptureWriter, SharedCaptureWriter};
+pub use host::HostInfo;
