@@ -1,0 +1,57 @@
+id: pb_container_breakout_precursors_linux
+version: 1
+name: "Container Breakout Precursors (Linux): Privileged Ops + Host Touch"
+severity: high
+description: >
+  Detects likely container escape attempts by correlating privileged namespace tools, kernel symbol access,
+  and host filesystem mounts/binds. Optional slot includes cgroup/namespace tampering.
+window_sec: 900
+cooldown_sec: 3600
+
+required:
+  - slot_id: ns_priv_tools
+    slot_ttl_sec: 420
+    fact: Exec
+    where:
+      - {field: exe, op: in, value: [/usr/bin/nsenter, /usr/bin/unshare, /usr/bin/chroot, /usr/bin/mount]}
+      - {field: cmd, op: regex, value: '(--mount|--uts|--ipc|--net|--pid|--user|/host|/proc/1/ns)'}
+    derive_tags: ["T1611"]    # Escape to Host
+
+  - slot_id: host_fs_touch
+    slot_ttl_sec: 420
+    fact: FileIO
+    where:
+      - {field: op, op: in, value: [open, write, mount]}
+      - {field: path, op: regex, value: '(/etc/ld\.so\.preload|/proc/kallsyms|/sys/module|/var/run/docker\.sock|/run/containerd/containerd\.sock)'}
+    derive_tags: ["T1611"]
+
+optional:
+  - slot_id: cgroup_ns_manip
+    slot_ttl_sec: 420
+    fact: FileIO
+    where:
+      - {field: op, op: in, value: [write, open]}
+      - {field: path, op: regex, value: '(/sys/fs/cgroup/|/proc/self/ns/)'}
+    derive_tags: ["T1611"]
+
+forbidden:
+  - slot_id: kube_node_maintenance
+    slot_ttl_sec: 1800
+    fact: Vendor
+    where:
+      - {field: product, op: eq, value: Kubernetes}
+      - {field: alert_type, op: eq, value: NodeDrain}
+    derive_tags: ["benign_cluster_maintenance"]
+
+vendor_map:
+  - {product: Falco, alert_type: "Container escape attempt", fills_slot: ns_priv_tools}
+  - {product: Sysdig, alert_type: "Access to docker.sock", fills_slot: host_fs_touch}
+
+explain:
+  primary_ttp: T1611
+  narrative: >
+    Use of namespace/privilege tools with host filesystem or kernel symbol access inside a container strongly
+    suggests an escape attempt. Cluster maintenance suppressions reduce noise.
+title: "Container Breakout Precursors (Linux): Privileged Ops + Host Touch"
+reason_code: CONTAINER_BREAKOUT_PRECURSORS_LINUX
+rules: []

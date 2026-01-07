@@ -1,0 +1,69 @@
+id: pb_outage_ransomware_linux_netshare_only
+version: 0.3
+name: Ransomware (Linux): Network-Share Encryption (SMB/NFS)
+severity: high
+description: Detects encryption focused on mounted network shares without heavy local churn.
+window_sec: 2400
+cooldown_sec: 3600
+context_keys: [host, user]
+
+required:
+  - slot_id: share_mounts_present
+    slot_ttl_sec: 1200
+    fact: FileIO
+    where:
+      - { field: mount_fstype, op: in, value: [cifs, nfs, nfs4, smb3] }
+      - { field: __agg.distinct_mounts, op: gte, value: 1 }
+
+  - slot_id: share_file_burst
+    slot_ttl_sec: 900
+    fact: FileIO
+    where:
+      - { field: mount_fstype, op: in, value: [cifs, nfs, nfs4, smb3] }
+      - { field: op, op: in, value: [write, rename] }
+      - { field: __agg.kind, op: eq, value: file_burst }
+      - { field: __agg.files, op: gte, value: 400 }
+      - { field: __agg.window_sec, op: lte, value: 900 }
+    derive_tags: [ "T1486", "T1021.002" ]
+
+optional:
+  - slot_id: crypto_exec
+    slot_ttl_sec: 420
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(?:/usr/(?:local/)?bin/)?(openssl|gpg|age|7z|zip|zstd)$" }
+      - { field: cmd, op: contains, value: "-" }
+    derive_tags: [ "T1486" ]
+
+  - slot_id: rename_exts
+    slot_ttl_sec: 900
+    fact: FileIO
+    where:
+      - { field: op, op: eq, value: rename }
+      - { field: ext_new, op: in, value: [.enc, .lock, .locked, .crypt, .encrypted] }
+    derive_tags: [ "T1486" ]
+
+forbidden:
+  - slot_id: legit_bulk_copy
+    slot_ttl_sec: 1800
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(rsync|cp|tar)$" }
+      - { field: cmd, op: regex, value: "--(archive|backup|preserve)" }
+
+links:
+  - { from: share_mounts_present, to: share_file_burst, requires: [same_host], follows_within_sec: 900 }
+  - { from: crypto_exec, to: share_file_burst, requires: [same_host, same_user], follows_within_sec: 600 }
+  - { from: rename_exts, to: share_file_burst, requires: [same_host], follows_within_sec: 900 }
+
+emit_ground_truth: true
+
+explain:
+  primary_ttp: T1486
+  steps_template:
+    - "Mounted shares present ({{share_mounts_present.__agg.distinct_mounts}})."
+    - "Burst on shares: {{share_file_burst.__agg.files}} files over {{share_file_burst.__agg.window_sec}}s."
+    - "{{#if crypto_exec}}Crypto tooling executed: {{crypto_exec.exe}} {{crypto_exec.cmd}}.{{/if}}"
+    - "{{#if rename_exts}}Encrypted extensions observed on shares.{{/if}}"
+  narrative: >
+    Encryption activity focused on network shares is consistent with client-side ransomware targeting SMB/NFS mounts.

@@ -1,0 +1,26 @@
+id: compress_then_exfil
+name: Compression → HTTPS Exfil
+description: >
+  Operator-aligned exfil chain: staging (compress/archive) followed by outbound exfil over HTTPS or DNS.
+window_secs: 1800
+key_by: [host, user]
+steps:
+  - id: stage_archive
+    domain: process
+    any_tags: ["T1560*", "archive_create*", "file_write*"]
+    cmd_regex: ".*(zip|7z|tar|rar|gzip|gpg|openssl\\s+enc).*"
+  - id: outbound_https_or_dns
+    domain: network
+    any_tags: ["net_connect*", "dns_tunnel*", "C2_*"]
+    cmd_regex: ".*(curl|wget|powershell|Invoke-WebRequest|bitsadmin|scp|rsync).*"
+    max_gap_secs: 900
+emit:
+  add_tags: ["ATTACK:EXFIL_COMPRESS", "T1560", "T1041"]
+  risk: 0.9
+version: 1
+severity: medium
+window_sec: 900
+cooldown_sec: 600
+title: Compression → HTTPS Exfil
+reason_code: COMPRESS_THEN_EXFIL
+rules: []

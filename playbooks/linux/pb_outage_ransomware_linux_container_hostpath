@@ -1,0 +1,67 @@
+id: pb_outage_ransomware_linux_container_hostpath
+version: 0.3
+name: Ransomware (Linux): Container HostPath/Volume Encryption
+severity: high
+description: Detects encryption from within containers against mounted host volumes (hostPath, bind).
+window_sec: 3600
+cooldown_sec: 3600
+context_keys: [host, user]
+
+required:
+  - slot_id: container_context
+    slot_ttl_sec: 1200
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(kubectl|crictl|ctr|nerdctl|docker)$" }
+      - { field: cmd, op: regex, value: "(exec|run|start|cp)\\b" }
+    derive_tags: [ "T1611" ]  # Abuse: containerization/escape (proxy for context)
+
+  - slot_id: volume_write_burst
+    slot_ttl_sec: 1200
+    fact: FileIO
+    where:
+      - { field: op, op: in, value: [write, rename] }
+      - { field: topdir, op: regex, value: "(/var/lib/docker/volumes/|/var/lib/kubelet/pods/|/srv|/mnt|/data|/host/)" }
+      - { field: __agg.kind, op: eq, value: file_burst }
+      - { field: __agg.files, op: gte, value: 500 }
+      - { field: __agg.window_sec, op: lte, value: 1200 }
+    derive_tags: [ "T1486" ]
+
+optional:
+  - slot_id: kubectl_exec_into_pod
+    slot_ttl_sec: 900
+    fact: Exec
+    where:
+      - { field: cmd, op: regex, value: "kubectl\\s+exec\\s+.*--\\s+(sh|bash|busybox|ash)" }
+    derive_tags: [ "T1059" ]
+
+  - slot_id: container_crypto_exec
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(?:/usr/(?:local/)?bin/)?(openssl|gpg|7z|zip|zstd)$" }
+    derive_tags: [ "T1486" ]
+
+forbidden:
+  - slot_id: benign_jobs
+    slot_ttl_sec: 1800
+    fact: Exec
+    where:
+      - { field: cmd, op: regex, value: "(helm|kubectl)\\s+(upgrade|apply)\\b.*(cron|job|backup)" }
+
+links:
+  - { from: container_context, to: volume_write_burst, requires: [same_host], follows_within_sec: 1200 }
+  - { from: kubectl_exec_into_pod, to: volume_write_burst, requires: [same_host], follows_within_sec: 900 }
+  - { from: container_crypto_exec, to: volume_write_burst, requires: [same_host], follows_within_sec: 900 }
+
+emit_ground_truth: true
+
+explain:
+  primary_ttp: T1486
+  steps_template:
+    - "Container control used: {{container_context.cmd}}."
+    - "Burst against mounted volumes: {{volume_write_burst.__agg.files}} files in {{volume_write_burst.__agg.window_sec}}s."
+    - "{{#if kubectl_exec_into_pod}}Interactive exec into pod: {{kubectl_exec_into_pod.cmd}}.{{/if}}"
+    - "{{#if container_crypto_exec}}Crypto tooling run inside container.{{/if}}"
+  narrative: >
+    Encryption from within a container targeting host volumes indicates container-mediated ransomware on shared storage.

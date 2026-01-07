@@ -1,0 +1,40 @@
+id: pb_terminal_exec_core
+name: "Terminal: interactive exec + common tooling"
+severity: low
+window_sec: 300
+
+# Accept multiple schemas: cmd OR command_line OR cmdline, etc.
+match:
+  any:
+    # (1) Interactive shell parent
+    - event.kind: process
+      event.action: exec
+      all:
+        - any:
+            - {field: parent_exe, op: regex, value: '(^|/)(bash|zsh|sh|dash|fish)$'}
+            - {field: parent_path, op: regex, value: '(^|/)(bash|zsh|sh|dash|fish)$'}
+            - {field: ppath, op: regex, value: '(^|/)(bash|zsh|sh|dash|fish)$'}
+        - any:
+            - {field: cmd, op: regex, value: '.+'}
+            - {field: command_line, op: regex, value: '.+'}
+            - {field: cmdline, op: regex, value: '.+'}
+
+    # (2) Hands-on CLI tooling regardless of parent
+    - event.kind: process
+      event.action: exec
+      any:
+        - {field: cmd, op: regex, value: '.*\b(curl|wget|nc|ncat|openssl|scp|rsync|python3?|perl|powershell|Invoke-WebRequest|bitsadmin)\b.*'}
+        - {field: command_line, op: regex, value: '.*\b(curl|wget|nc|ncat|openssl|scp|rsync|python3?|perl|powershell|Invoke-WebRequest|bitsadmin)\b.*'}
+        - {field: cmdline, op: regex, value: '.*\b(curl|wget|nc|ncat|openssl|scp|rsync|python3?|perl|powershell|Invoke-WebRequest|bitsadmin)\b.*'}
+
+fills_slot: terminal_exec
+
+actions:
+  - type: raise_incident
+    reason_codes: ["TerminalExec"]
+version: 1
+cooldown_sec: 300
+description: n/a
+title: "Terminal: interactive exec + common tooling"
+reason_code: TERMINAL_EXEC_CORE
+rules: []

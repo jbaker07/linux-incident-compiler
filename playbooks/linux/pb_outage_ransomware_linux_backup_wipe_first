@@ -1,0 +1,64 @@
+id: pb_outage_ransomware_linux_backup_wipe_first
+version: 0.3
+name: Ransomware (Linux): Backup/Snapshot Destruction then Encryption
+severity: high
+description: Detects targeted snapshot/backup removal sequences followed by an encryption burst.
+window_sec: 5400
+cooldown_sec: 5400
+context_keys: [host, user]
+
+required:
+  - slot_id: snapshot_wipe
+    slot_ttl_sec: 2400
+    fact: Exec
+    where:
+      - { field: cmd, op: regex, value: "(lvremove\\s|lvconvert\\s|vgremove\\s|zfs\\s+destroy\\s|zfs\\s+destroy\\s+-r\\s|btrfs\\s+subvolume\\s+delete|tmutil|rsnapshot|restic\\s+forget|rm\\s+-rf\\s+(/backup|/snapshots|/mnt/backup))" }
+    derive_tags: [ "T1490" ]
+
+  - slot_id: file_burst
+    slot_ttl_sec: 1200
+    fact: FileIO
+    where:
+      - { field: __agg.kind, op: eq, value: file_burst }
+      - { field: __agg.files, op: gte, value: 400 }
+      - { field: __agg.window_sec, op: lte, value: 1200 }
+    derive_tags: [ "T1486" ]
+
+optional:
+  - slot_id: service_stop
+    slot_ttl_sec: 1800
+    fact: Exec
+    where:
+      - { field: cmd, op: regex, value: "systemctl\\s+(stop|disable)\\s+(backu?p|rsnapshot|zfs|btrfs|lvm2|vold)" }
+    derive_tags: [ "T1489" ]
+
+  - slot_id: crypto_exec
+    slot_ttl_sec: 420
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(?:/usr/(?:local/)?bin/)?(openssl|gpg|age|7z|zip|zstd)$" }
+    derive_tags: [ "T1486" ]
+
+forbidden:
+  - slot_id: scheduled_maintenance
+    slot_ttl_sec: 2400
+    fact: Exec
+    where:
+      - { field: user, op: eq, value: root }
+      - { field: cmd, op: regex, value: "(zfs\\s+destroy\\s+.*snapshot.*(weekly|monthly)|restic\\s+forget\\s+--keep)" }
+
+links:
+  - { from: snapshot_wipe, to: service_stop, requires: [same_host, same_user], follows_within_sec: 900 }
+  - { from: snapshot_wipe, to: file_burst, requires: [same_host, same_user], follows_within_sec: 1800 }
+  - { from: crypto_exec, to: file_burst, requires: [same_host, same_user], follows_within_sec: 600 }
+
+emit_ground_truth: true
+
+explain:
+  primary_ttp: T1490
+  steps_template:
+    - "Snapshot/backup removal: {{snapshot_wipe.cmd}}."
+    - "{{#if service_stop}}Related services stopped: {{service_stop.cmd}}.{{/if}}"
+    - "Encryption burst: {{file_burst.__agg.files}} files over {{file_burst.__agg.window_sec}}s."
+  narrative: >
+    Snapshot/backup destruction followed by a file-encryption burst indicates a deliberate attempt to inhibit recovery (double-extortion playbook).

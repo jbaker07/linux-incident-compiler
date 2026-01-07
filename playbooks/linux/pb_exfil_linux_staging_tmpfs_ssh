@@ -1,0 +1,71 @@
+id: pb_exfil_linux_staging_tmpfs_ssh
+version: 0.2
+name: Exfiltration: Sensitive Reads → Tmpfs Archive → SSH to New Peer (Linux)
+severity: high
+description: Cross-vector correlation of sensitive file access, archive staging in tmpfs, and outbound transfer to a novel peer.
+window_sec: 1800
+cooldown_sec: 3600
+
+required:
+  - slot_id: sensitive_reads
+    slot_ttl_sec: 900
+    fact: FileIO
+    where:
+      - { field: op, op: in, value: [read, open] }
+      - { field: path, op: regex, value: "(/etc/shadow|/root/\\.ssh/|/home/.+/.ssh/|/var/lib/(docker|kubelet)/secrets|/etc/kubernetes|/var/lib/mysql)" }
+      - { field: __agg.kind, op: eq, value: sensitive_reads }
+      - { field: __agg.files, op: gte, value: 20 }
+    derive_tags: [ "T1005", "T1552" ]  # Data from Local System / Unsecured Credentials
+
+  - slot_id: tmpfs_archive
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(tar|zip|7z|xz|zstd)$" }
+      - { field: cmd, op: regex, value: "(-c|-a|-cf|-czf|-J|-T|-mx=\\d)" }
+      - { field: cwd, op: regex, value: "^/(dev/shm|tmp)(/|$)" }
+    derive_tags: [ "T1560" ]  # Archive Collected Data
+
+  - slot_id: egress_new_peer
+    slot_ttl_sec: 900
+    fact: NetConn
+    where:
+      - { field: dst_ip, op: not_in_cidr, value: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16] }
+      - { field: __agg.kind, op: eq, value: upload }
+      - { field: __agg.bytes_out, op: gte, value: 100000000 }
+      - { field: __agg.peer_is_new, op: eq, value: true }
+    derive_tags: [ "T1041" ]  # Exfiltration Over C2 / SSH
+
+optional:
+  - slot_id: crypto_in_pipeline
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - { field: cmd, op: regex, value: "(openssl\\s+enc|gpg\\s+-c|age\\s+-e)" }
+    derive_tags: [ "T1041", "T1560" ]
+
+  - slot_id: cloud_endpoints
+    slot_ttl_sec: 900
+    fact: NetConn
+    where:
+      - { field: dst_domain, op: regex, value: "(s3\\.amazonaws\\.com|storage\\.googleapis\\.com|blob\\.core\\.windows\\.net)" }
+    derive_tags: [ "T1567.002" ]  # Exfil to Cloud Storage
+
+forbidden:
+  - slot_id: backup_window
+    slot_ttl_sec: 3600
+    fact: Time
+    where:
+      - { field: dow, op: in, value: [Sat, Sun] }
+      - { field: hour, op: in, value: [0,1,2,3,4,5] }
+      - { field: policy.allow_backup, op: eq, value: true }
+
+vendor_map:
+  - { product: CrowdStrike, alert_type: "Large outbound transfer", fills_slot: egress_new_peer }
+  - { product: Elastic, alert_type: "Sensitive file access", fills_slot: sensitive_reads }
+
+explain:
+  primary_ttp: [T1005, T1560, T1041]
+  narrative: >
+    The host accessed sensitive files, staged an archive in tmpfs, and sent a large upload to a previously unseen
+    external peer. Optional crypto-in-pipeline and cloud endpoints strengthen confidence and traceability.

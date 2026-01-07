@@ -1,0 +1,47 @@
+# playbooks/pb_outage_ransomware_linux_vm_image_datastore.yaml
+id: pb_outage_ransomware_linux_vm_image_datastore
+version: 1
+name: "Ransomware (Linux): VM Image / Datastore Impact"
+severity: high
+description: Detects rapid modification of VM images (qcow2/raw) and hypervisor control actions.
+window_sec: 1200
+cooldown_sec: 5400
+
+required:
+  - slot_id: vm_image_write_burst
+    slot_ttl_sec: 900
+    fact: FileIO
+    where:
+      - {field: op, op: in, value: [write, rename]}
+      - {field: path, op: regex, value: "(/var/lib/libvirt/images/.*\\.(qcow2|img|raw)|/srv/vm/.*\\.(qcow2|img|raw)|/vmstore/.*)"}
+      - {field: __agg.kind, op: eq, value: file_burst}
+      - {field: __agg.files, op: gte, value: 20}                  # fewer files but very large
+      - {field: __agg.total_bytes, op: gte, value: 10737418240}   # >= 10 GiB
+      - {field: __agg.window_sec, op: lte, value: 900}
+    derive_tags: ["T1486"]
+
+optional:
+  - slot_id: virsh_vm_shutdowns
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: exe, op: regex, value: ".*/virsh$"}
+      - {field: cmd, op: regex, value: "(shutdown|destroy)\\s"}
+    derive_tags: ["T1490"]
+
+forbidden:
+  - slot_id: maintenance_window
+    slot_ttl_sec: 1800
+    fact: Exec
+    where:
+      - {field: cmd, op: contains, value: "backup"}
+      - {field: signer, op: eq, value: first_party_backup}
+
+explain:
+  primary_ttp: T1486
+  narrative: >
+    Large, rapid writes to VM image paths and/or deliberate VM shutdowns indicate hypervisor-targeted impact,
+    consistent with ransomware aiming to incapacitate services.
+title: "Ransomware (Linux): VM Image / Datastore Impact"
+reason_code: OUTAGE_RANSOMWARE_LINUX_VM_IMAGE_DATASTORE
+rules: []

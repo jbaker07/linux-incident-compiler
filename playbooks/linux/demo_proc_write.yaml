@@ -1,0 +1,15 @@
+id: pb_demo_proc_write
+name: "Demo: Process creates files"
+severity: "medium"
+window_sec: 300
+cooldown_sec: 60
+
+required_slots:
+  - id: "proc_exec"
+    fact_type: "ProcExec"
+    ttl_sec: 300
+  - id: "file_write"
+    fact_type: "FileWrite"
+    ttl_sec: 300
+
+optional_slots: []

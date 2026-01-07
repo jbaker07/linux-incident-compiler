@@ -1,0 +1,28 @@
+severity: high
+id: lotl_cred_chain
+name: Living‑off‑the‑Land Credential Access
+description: >
+  LoTL path to credential access: admin shell tooling or script host → LSASS memory or SAM hive touch → network auth usage.
+window_sec: 900
+key_by: [host, user]
+steps:
+  - id: admin_shell
+    domain: process
+    any_tags: ["T1059*", "powershell*", "cmd.exe*", "wmic*", "bash*"]
+    cmd_regex: ".*(Get-Credential|mimikatz|lsass|procdump|sekurlsa|vssadmin).*"
+  - id: cred_material_touch
+    domain: privilege
+    any_tags: ["credential::dump", "memory::injection", "T1003*"]
+    max_gap_secs: 1800
+  - id: auth_use
+    domain: auth
+    any_tags: ["auth::spray", "logon_*", "T1110*"]
+    max_gap_secs: 1800
+emit:
+  add_tags: ["ATTACK:LOTL_CRED", "T1003", "T1110"]
+  risk: 0.85
+version: 1
+cooldown_sec: 600
+title: Living‑off‑the‑Land Credential Access
+reason_code: LOTL_CRED_CHAIN
+rules: []

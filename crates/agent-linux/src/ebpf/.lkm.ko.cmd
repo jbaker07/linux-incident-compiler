@@ -1,0 +1,1 @@
+savedcmd_lkm.ko := ld -r -EL  -maarch64linux -z norelro -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T /home/jermaineb/EDR-platform/edr-agent/src/asahi-kernel-exact/scripts/module.lds -o lkm.ko lkm.o lkm.mod.o .module-common.o

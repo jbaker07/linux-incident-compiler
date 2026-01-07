@@ -1,0 +1,72 @@
+id: pb_encryptor_linux_memfd_rwx_lowrename
+version: 1
+name: "In‑Memory Encryptor: RWX/MEMFD + Low-Rename Burst (Linux)"
+severity: high
+description: Detects pre-encryption ransomware that executes from memory (memfd/RWX) and modifies many files with few renames.
+window_sec: 600
+cooldown_sec: 3600
+
+required:
+  - slot_id: mem_exec_or_rwx
+    slot_ttl_sec: 180
+    fact: Exec
+    where:
+      # Accept either explicit memfd exec/mmap RWX or equivalent detector tags
+      - {field: tag, op: in, value: [MEMFD_EXEC, RWX_MAP]}
+        # OR: explicit linux signals if available
+      - any_of:
+          - {field: exe, op: regex, value: "^/memfd:.+"}
+          - {field: map_perm, op: in, value: [rwx, wx]}
+    derive_tags: ["T1055", "T1620"]    # process injection / reflectively-loaded code
+
+  - slot_id: burst_writes_low_rename
+    slot_ttl_sec: 420
+    fact: FileIO
+    where:
+      - {field: op, op: in, value: [write, rename]}
+      - {field: topdir, op: in, value: [/home, /var/www, /srv, /mnt, /opt]}
+      - {field: __agg.kind, op: eq, value: file_burst}
+      - {field: __agg.files, op: gte, value: 300}
+      - {field: __agg.distinct_topdirs, op: gte, value: 3}
+      - {field: __agg.window_sec, op: lte, value: 420}
+      - {field: __agg.rename_ratio, op: lte, value: 0.25}
+    derive_tags: ["T1486"]
+
+optional:
+  - slot_id: crypto_primitives_seen
+    slot_ttl_sec: 300
+    fact: Exec
+    where:
+      - {field: cmd, op: regex, value: "(EVP_|AES_|ChaCha|libsodium|mbedTLS)"}
+      - {field: exe, op: not_in, value: [/usr/bin/openssl, /usr/bin/age, /usr/bin/gpg]}
+    derive_tags: ["T1486"]
+
+  - slot_id: service_stop
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: cmd, op: regex, value: "(systemctl\\s+stop\\s+\\w+|service\\s+\\w+\\s+stop)"}
+    derive_tags: ["T1489"]
+
+forbidden:
+  - slot_id: known_backup_job
+    slot_ttl_sec: 900
+    fact: Exec
+    where:
+      - {field: signer, op: eq, value: first_party_backup}
+      - {field: cmd, op: contains, value: backup}
+
+vendor_map:
+  - {product: CrowdStrike, alert_type: "Suspicious memory mapping (RWX)", fills_slot: mem_exec_or_rwx}
+  - {product: Elastic, alert_type: "Memfd-based execution", fills_slot: mem_exec_or_rwx}
+  - {product: Elastic, alert_type: "Ransomware behavior", fills_slot: burst_writes_low_rename}
+
+explain:
+  primary_ttp: [T1055, T1486]
+  narrative: >
+    In-memory execution (memfd/RWX) combined with a high-velocity file modification burst with few renames
+    indicates pre-encryption behavior designed to evade on-disk detection. Optional crypto primitive usage
+    and service stops increase confidence.
+title: "In‑Memory Encryptor: RWX/MEMFD + Low-Rename Burst (Linux)"
+reason_code: ENCRYPTOR_LINUX_MEMFD_RWX_LOWRENAME
+rules: []

@@ -1,0 +1,74 @@
+id: pb_outage_ransomware_linux_luks_locker
+version: 0.3
+name: Ransomware (Linux): LUKS/Disk Locker Attempt
+severity: high
+description: Detects attempts to lock or re-encrypt Linux volumes (LUKS/DM) and boot-chain changes that persist encryption across reboot.
+window_sec: 7200
+cooldown_sec: 7200
+context_keys: [host, user]
+
+required:
+  - slot_id: locker_tooling_exec
+    slot_ttl_sec: 1800
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(?:/usr/(?:local/)?bin/)?(cryptsetup|dmsetup|blkid|lsblk)$" }
+      - { field: cmd, op: regex, value: "(luksFormat|reencrypt|open|close|luksAddKey|table|status)" }
+    derive_tags: [ "T1486" ]
+
+  - slot_id: boot_chain_mod
+    slot_ttl_sec: 3600
+    fact: Exec
+    where:
+      - { field: cmd, op: regex, value: "(update-initramfs|dracut|grub-mkconfig|grub2-mkconfig|grub-install)" }
+    derive_tags: [ "T1490" ]  # Inhibit System Recovery
+
+optional:
+  - slot_id: system_config_edits
+    slot_ttl_sec: 3600
+    fact: FileIO
+    where:
+      - { field: op, op: in, value: [write, create, rename] }
+      - { field: filename, op: in, value: [/etc/crypttab, /etc/fstab] }
+    derive_tags: [ "T1490" ]
+
+  - slot_id: service_shutdown
+    slot_ttl_sec: 1800
+    fact: Exec
+    where:
+      - { field: cmd, op: regex, value: "systemctl\\s+(stop|disable)\\s+(ssh|nfs|smb|cron|backup|multipathd)" }
+    derive_tags: [ "T1489" ]
+
+  - slot_id: forced_reboot
+    slot_ttl_sec: 900
+    fact: Exec
+    where:
+      - { field: cmd, op: regex, value: "shutdown\\s+-r|reboot\\b|systemctl\\s+reboot" }
+    derive_tags: [ "T1529" ]  # System Shutdown/Reboot
+
+forbidden:
+  - slot_id: legit_maintenance
+    slot_ttl_sec: 7200
+    fact: Exec
+    where:
+      - { field: user, op: regex, value: "^(root|admin)$" }
+      - { field: cmd, op: regex, value: "(grub.*update|update-initramfs|dracut).*(kernel|patch|upgrade)" }
+
+links:
+  - { from: locker_tooling_exec, to: boot_chain_mod, requires: [same_host], follows_within_sec: 3600 }
+  - { from: system_config_edits, to: boot_chain_mod, requires: [same_host], follows_within_sec: 3600 }
+  - { from: service_shutdown, to: boot_chain_mod, requires: [same_host], follows_within_sec: 1800 }
+  - { from: boot_chain_mod, to: forced_reboot, requires: [same_host], follows_within_sec: 900 }
+
+emit_ground_truth: true
+
+explain:
+  primary_ttp: T1486
+  steps_template:
+    - "Locker tooling: {{locker_tooling_exec.exe}} {{locker_tooling_exec.cmd}}."
+    - "Boot chain modified via {{boot_chain_mod.cmd}}."
+    - "{{#if system_config_edits}}System config edited: {{system_config_edits.filename}} ({{system_config_edits.op}}).{{/if}}"
+    - "{{#if service_shutdown}}Services disabled: {{service_shutdown.cmd}}.{{/if}}"
+    - "{{#if forced_reboot}}Forced reboot executed.{{/if}}"
+  narrative: >
+    LUKS/DM operations alongside boot-chain modifications indicate a disk-locker attempt that will persist after reboot.

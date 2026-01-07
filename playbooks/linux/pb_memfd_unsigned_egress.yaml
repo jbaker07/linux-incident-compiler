@@ -1,0 +1,31 @@
+id: memfd_unsigned_egress
+name: In‑Memory Exec → Unsigned Child → Egress
+description: >
+  Detects in‑memory execution or RWX mapping, followed by an unsigned/atypical child process, then
+  outbound egress to the Internet. Cross-domain: memory → process → network.
+window_secs: 1200
+key_by: [host, user]
+steps:
+  - id: memfd_or_rwx
+    domain: memory
+    any_tags: ["MEMFD_EXEC", "RWX_MAP", "T1055*", "memory::injection"]
+  - id: unsigned_child
+    domain: process
+    any_tags: ["process::hollow", "T1055*"]
+    cmd_regex: "^(?!(.*(signedvendor|/usr/bin/ssh|/usr/bin/sudo))).*$"
+    max_gap_secs: 300
+  - id: egress_443_or_tunnel
+    domain: network
+    any_tags: ["net_connect*", "dns_tunnel*", "C2_*"]
+    cmd_regex: ".*(curl|wget|powershell|bitsadmin|nc|openssl).*"
+    max_gap_secs: 600
+emit:
+  add_tags: ["ATTACK:INMEM_EGRESS", "T1055", "T1041"]
+  risk: 0.95
+version: 1
+severity: medium
+window_sec: 900
+cooldown_sec: 300
+title: In‑Memory Exec → Unsigned Child → Egress
+reason_code: MEMFD_UNSIGNED_EGRESS
+rules: []

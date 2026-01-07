@@ -1,0 +1,68 @@
+id: pb_lotl_linux_curl_devshm_systemdrun_memfd
+version: 0.2
+name: LotL: curl→/dev/shm→systemd-run (transient)→memfd (Linux)
+severity: high
+description: Living-off-the-land chain using native tools to fetch, stage in tmpfs, launch transient systemd unit, then in-memory execute.
+window_sec: 1200
+cooldown_sec: 2400
+
+required:
+  - slot_id: network_script_fetch
+    slot_ttl_sec: 240
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(?:/usr/bin/)?(curl|wget)$" }
+      - { field: cmd, op: regex, value: "\\shttps?://[^\\s]+" }
+    derive_tags: [ "T1105", "T1106" ]
+
+  - slot_id: tmpfs_write_stage
+    slot_ttl_sec: 360
+    fact: FileIO
+    where:
+      - { field: op, op: in, value: [write, create] }
+      - { field: path, op: regex, value: "^/(dev/shm|tmp)(/|$)" }
+      - { field: __agg.kind, op: eq, value: staging_files }
+      - { field: __agg.files, op: gte, value: 5 }
+    derive_tags: [ "T1105" ]
+
+  - slot_id: systemd_transient_start
+    slot_ttl_sec: 360
+    fact: Exec
+    where:
+      - { field: exe, op: in, value: [/usr/bin/systemd-run, systemd-run] }
+      - { field: cmd, op: regex, value: "--unit=(tmp|shm|.\\w+)" }
+    derive_tags: [ "T1543.002" ]  # Create/Modify System Process: Systemd Service
+
+optional:
+  - slot_id: memfd_or_rwx
+    slot_ttl_sec: 240
+    fact: Exec
+    where:
+      - { field: tag, op: in, value: [MEMFD_EXEC, RWX_MAP] }
+    derive_tags: [ "T1055", "T1620" ]
+
+  - slot_id: cleanup_artifacts
+    slot_ttl_sec: 300
+    fact: Exec
+    where:
+      - { field: cmd, op: regex, value: "(shred\\s+-u\\s+|rm\\s+-rf\\s+/dev/shm/|mount\\s+-o\\s+remount,ro)" }
+    derive_tags: [ "T1070" ]
+
+forbidden:
+  - slot_id: ci_pipeline_fetch
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(curl|wget)$" }
+      - { field: env.CI, op: eq, value: "true" }
+
+vendor_map:
+  - { product: CrowdStrike, alert_type: "Suspicious systemd-run usage", fills_slot: systemd_transient_start }
+  - { product: Elastic, alert_type: "Execution from /dev/shm", fills_slot: tmpfs_write_stage }
+
+explain:
+  primary_ttp: [T1105, T1543.002, T1055]
+  narrative: >
+    Adversary fetched content over HTTP(S), staged it in tmpfs (/dev/shm or /tmp), launched a transient
+    systemd unit to execute, and optionally pivoted to in-memory payloads. This is a classic LotL chain with
+    minimal on-disk footprint.

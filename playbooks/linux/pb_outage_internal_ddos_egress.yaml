@@ -1,0 +1,54 @@
+id: pb_outage_internal_ddos_egress
+version: 1
+name: Internal Host Egress Flood (DDoS)
+severity: high
+description: Detects a compromised host generating sustained high-rate outbound traffic likely to cause outage.
+window_sec: 900
+cooldown_sec: 900
+
+required:
+  - slot_id: flood_connect_rate
+    slot_ttl_sec: 300
+    fact: NetConn
+    where:
+      - {field: __agg.kind, op: eq, value: conn_rate}
+      - {field: __agg.conn_rate_eps, op: gte, value: 2000}     # events per second
+      - {field: __agg.window_sec, op: lte, value: 300}
+    derive_tags: ["T1498"]    # Network Denial of Service
+
+  - slot_id: dst_profile
+    slot_ttl_sec: 600
+    fact: NetConn
+    where:
+      - {field: dst_port, op: in, value: [80, 443, 53]}
+      - {field: reputation, op: neq, value: "corporate"}
+    derive_tags: ["T1498"]
+
+optional:
+  - slot_id: proc_origin
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: exe, op: regex, value: "^(?:/usr/bin/)?(curl|wget|node|python|hping3|nping)$"}
+    derive_tags: ["T1059"]
+
+forbidden:
+  - slot_id: approved_test
+    slot_ttl_sec: 900
+    fact: VendorAlert
+    where:
+      - {field: product, op: eq, value: "NOC"}
+      - {field: type, op: eq, value: "CapacityTest"}
+
+vendor_map:
+  - {product: NetFlow, alert_type: "High PPS Host", fills_slot: flood_connect_rate}
+  - {product: Firewall, alert_type: "Outbound Flood", fills_slot: flood_connect_rate}
+
+explain:
+  primary_ttp: T1498
+  narrative: >
+    A single host sustained >2k connects per second to public services, which is characteristic of outbound DDoS activity
+    and likely to cause collateral outage.
+title: Internal Host Egress Flood (DDoS)
+reason_code: OUTAGE_INTERNAL_DDOS_EGRESS
+rules: []

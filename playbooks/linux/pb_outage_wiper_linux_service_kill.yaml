@@ -1,0 +1,53 @@
+id: pb_outage_wiper_linux_service_kill
+version: 1
+name: Destructive Wiper / Service Kill
+severity: high
+description: Correlates destructive file ops and service disablement leading to outage.
+window_sec: 1800
+cooldown_sec: 3600
+
+required:
+  - slot_id: service_disable
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: cmd, op: regex, value: '(systemctl\s+(disable|stop)\s+\w+|chkconfig\s+\w+\s+off)'}
+    derive_tags: ["T1489"]
+
+  - slot_id: destructive_io
+    slot_ttl_sec: 900
+    fact: Exec
+    where:
+      - {field: exe, op: regex, value: "^(?:/usr/bin/)?(shred|dd|wipefs|blkdiscard)$"}
+      - {field: cmd, op: contains, value: "/dev/"}
+    derive_tags: ["T1561.001"]   # Disk Wipe
+
+optional:
+  - slot_id: config_wipe
+    slot_ttl_sec: 900
+    fact: FileIO
+    where:
+      - {field: path, op: regex, value: '^/(etc|var|opt)/.*\.(conf|service|target)$'}
+      - {field: op, op: in, value: [delete, write]}
+    derive_tags: ["T1490"]   # Inhibit System Recovery
+
+forbidden:
+  - slot_id: maintenance_window
+    slot_ttl_sec: 1800
+    fact: VendorAlert
+    where:
+      - {field: product, op: eq, value: ChangeManagement}
+      - {field: type, op: eq, value: "Approved Maintenance"}
+
+vendor_map:
+  - {product: Sysmon, alert_type: "Service Control", fills_slot: service_disable}
+  - {product: Elastic, alert_type: "Disk Wipe Utility", fills_slot: destructive_io}
+
+explain:
+  primary_ttp: T1489
+  narrative: >
+    Stopping or disabling services combined with destructive disk/partition utilities indicates an
+    outage-causing wiper or sabotage activity.
+title: Destructive Wiper / Service Kill
+reason_code: OUTAGE_WIPER_LINUX_SERVICE_KILL
+rules: []

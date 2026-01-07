@@ -1,0 +1,56 @@
+# playbooks/pb_outage_ransomware_linux_attr_locker.yaml
+id: pb_outage_ransomware_linux_attr_locker
+version: 1
+name: "Ransomware (Linux): Permission/Attribute Locker"
+severity: high
+description: Detects mass `chattr +i` / ACL locks and subsequent access failures used to deny file access.
+window_sec: 900
+cooldown_sec: 3600
+
+required:
+  - slot_id: chattr_mass_lock
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: exe, op: regex, value: ".*/chattr$"}
+      - {field: cmd, op: regex, value: "\\+i\\s"}
+      - {field: __agg.kind, op: eq, value: exec_burst}
+      - {field: __agg.count, op: gte, value: 200}
+      - {field: __agg.distinct_topdirs, op: gte, value: 3}
+      - {field: __agg.window_sec, op: lte, value: 600}
+    derive_tags: ["T1222", "T1490"]
+
+  - slot_id: access_fail_spike
+    slot_ttl_sec: 600
+    fact: FileIO
+    where:
+      - {field: op, op: eq, value: open_fail}
+      - {field: errno, op: in, value: [EACCES, EPERM]}
+      - {field: __agg.kind, op: eq, value: errno_spike}
+      - {field: __agg.count, op: gte, value: 300}
+      - {field: __agg.window_sec, op: lte, value: 600}
+
+optional:
+  - slot_id: setfacl_lockdown
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: exe, op: regex, value: ".*/setfacl$"}
+      - {field: cmd, op: regex, value: "(-m|-b)\\s"}
+
+forbidden:
+  - slot_id: hardening_maintenance
+    slot_ttl_sec: 1800
+    fact: Exec
+    where:
+      - {field: cmd, op: contains, value: "maintenance"}
+      - {field: user, op: in, value: [root, admin]}
+
+explain:
+  primary_ttp: T1490
+  narrative: >
+    Mass immutable-bit setting and a concurrent spike of permission-denied file opens indicate an impact technique
+    that denies access without cryptography. Treat as ransomware-equivalent impact.
+title: "Ransomware (Linux): Permission/Attribute Locker"
+reason_code: OUTAGE_RANSOMWARE_LINUX_ATTR_LOCKER
+rules: []

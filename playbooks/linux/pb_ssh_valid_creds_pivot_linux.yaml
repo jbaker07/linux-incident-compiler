@@ -1,0 +1,69 @@
+id: pb_ssh_valid_creds_pivot_linux
+version: 1
+name: "SSH Valid-Creds Pivot (Linux): New Success + Tunnel/Copy"
+severity: medium
+description: >
+  Detects lateral movement via SSH using valid credentials by correlating a new or unusual successful login
+  with subsequent tunneling or file copy actions. Brute-force burst is optional and may precede success.
+window_sec: 1800
+cooldown_sec: 1800
+
+required:
+  - slot_id: new_success_login
+    slot_ttl_sec: 900
+    fact: Auth
+    where:
+      - {field: outcome, op: eq, value: success}
+      - {field: src_asn_new, op: eq, value: true}
+      - {field: user, op: not_in, value: [backup, automation, ansible, salt]}
+    derive_tags: ["T1021.004", "T1078"]    # Remote Services: SSH, Valid Accounts
+
+  - slot_id: ssh_tunnel_or_copy
+    slot_ttl_sec: 900
+    fact: Exec
+    where:
+      - {field: exe, op: in, value: [/usr/bin/ssh, /usr/bin/scp, /usr/bin/rsync, /usr/bin/sftp, /usr/bin/sshuttle, /usr/bin/socat]}
+      - {field: cmd, op: regex, value: '(-L\s| -R\s| -D\s|scp\s+|rsync\s+-e\s+ssh|sftp\s+|sshuttle\s+|socat\s+TCP|chisel\s+client)'}
+    derive_tags: ["T1021.004", "T1090"]    # SSH + Proxy/Tunnel
+
+optional:
+  - slot_id: auth_fail_burst
+    slot_ttl_sec: 600
+    fact: Auth
+    where:
+      - {field: __agg.kind, op: eq, value: auth_fail_burst}
+      - {field: __agg.failures, op: gte, value: 8}
+      - {field: __agg.window_sec, op: lte, value: 300}
+    derive_tags: ["T1110"]    # Brute Force
+
+  - slot_id: key_material_touch
+    slot_ttl_sec: 600
+    fact: FileIO
+    where:
+      - {field: op, op: in, value: [open, read]}
+      - {field: path, op: regex, value: "(/home/.+/.ssh/(id_rsa|id_ed25519|known_hosts)|/etc/ssh/ssh_config)"}
+    derive_tags: ["T1552.004"]    # Private Keys
+
+forbidden:
+  - slot_id: admin_jumpbox_pattern
+    slot_ttl_sec: 900
+    fact: Net
+    where:
+      - {field: dst_ip, op: in_cidr, value: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]}
+      - {field: user, op: in, value: [infra_admin, devops]}
+      - {field: change_ticket, op: exists, value: true}
+    derive_tags: ["benign_ops"]
+
+vendor_map:
+  - {product: Zeek, alert_type: "SSH tunnel", fills_slot: ssh_tunnel_or_copy}
+  - {product: Okta, alert_type: "New geo/ASN login", fills_slot: new_success_login}
+  - {product: CrowdStrike, alert_type: "Suspicious SSH usage", fills_slot: ssh_tunnel_or_copy}
+
+explain:
+  primary_ttp: T1021.004
+  narrative: >
+    A new successful SSH login from an unfamiliar ASN followed by tunneling or secure copy indicates a likely
+    lateral movement pivot. Preceding authentication failure bursts and key access elevate confidence.
+title: "SSH Valid-Creds Pivot (Linux): New Success + Tunnel/Copy"
+reason_code: SSH_VALID_CREDS_PIVOT_LINUX
+rules: []

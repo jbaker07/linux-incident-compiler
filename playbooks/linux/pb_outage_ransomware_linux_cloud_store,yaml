@@ -1,0 +1,52 @@
+# playbooks/pb_outage_ransomware_linux_cloud_store.yaml
+id: pb_outage_ransomware_linux_cloud_store
+version: 0.2
+name: Ransomware (Linux): Cloud Object Store Impact (rclone/azcopy/s3cmd)
+severity: high
+description: Detects high-velocity cloud data overwrite/delete consistent with ransom impact without local crypto.
+window_sec: 1800
+cooldown_sec: 5400
+
+required:
+  - slot_id: cloud_cli_exec
+    slot_ttl_sec: 900
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: ".*/(rclone|s3cmd|aws|azcopy|gsutil)$" }
+      - { field: cmd, op: regex, value: "(sync|copy|mv|rm|delete|cp)\\s" }
+    derive_tags: [ "T1041", "T1567" ]
+
+  - slot_id: cloud_api_burst
+    slot_ttl_sec: 900
+    fact: Net
+    where:
+      - { field: dst_sni, op: regex, value: "(amazonaws\\.com|storage\\.googleapis\\.com|blob\\.core\\.windows\\.net|digitaloceanspaces\\.com)" }
+      - { field: __agg.kind, op: eq, value: http_verb_burst }
+      - { field: __agg.http_verbs, op: any_in, value: [PUT, DELETE] }
+      - { field: __agg.requests, op: gte, value: 2000 }
+      - { field: __agg.window_sec, op: lte, value: 900 }
+
+optional:
+  - slot_id: rclone_conf_touch
+    slot_ttl_sec: 900
+    fact: FileIO
+    where:
+      - { field: path, op: regex, value: "/\\.config/rclone/rclone\\.conf$" }
+      - { field: op, op: in, value: [write, rename] }
+
+forbidden:
+  - slot_id: known_backup_window
+    slot_ttl_sec: 3600
+    fact: Exec
+    where:
+      - { field: signer, op: eq, value: first_party_backup }
+      - { field: cmd, op: contains, value: "backup" }
+
+vendor_map:
+  - { product: Microsoft Defender, alert_type: "Suspicious object store deletion", fills_slot: cloud_api_burst }
+
+explain:
+  primary_ttp: T1486
+  narrative: >
+    Cloud CLIs performing high-volume PUT/DELETE bursts toward object stores indicate remote impact.
+    Local file cryptography may be absent; the impact is on cloud data.

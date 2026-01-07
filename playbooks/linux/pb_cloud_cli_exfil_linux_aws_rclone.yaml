@@ -1,0 +1,76 @@
+id: pb_cloud_cli_exfil_linux_aws_rclone
+version: 1
+name: Data Exfil via Cloud CLI / rclone (Linux)
+severity: high
+description: >
+  Detects bulk data exfiltration using cloud CLIs (aws/gsutil/azcopy) or rclone by correlating recursive
+  copy/sync commands, access to credentials, and sustained outbound transfer volume.
+window_sec: 1200
+cooldown_sec: 3600
+
+required:
+  - slot_id: exfil_tool_exec
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: exe, op: regex, value: "^(aws|gsutil|azcopy|rclone)$"}
+      - {field: cmd, op: regex, value: "(sync|cp|copy|rsync|--recursive|--transfers|--files-from|--include|--exclude)"}
+    derive_tags: ["T1567.002", "T1030"]    # Exfil to Cloud Storage, Data Transfer Size Limits
+
+  - slot_id: outbound_volume
+    slot_ttl_sec: 900
+    fact: NetFlow
+    where:
+      - {field: __agg.kind, op: eq, value: "egress_volume"}
+      - {field: __agg.bytes_out, op: gte, value: 500000000}    # ~500MB
+      - {field: __agg.window_sec, op: lte, value: 900}
+    derive_tags: ["T1041"]    # Exfil over C2 Channel (generic egress)
+
+optional:
+  - slot_id: creds_access
+    slot_ttl_sec: 600
+    fact: FileIO
+    where:
+      - {field: op, op: in, value: [read, open]}
+      - {field: path, op: regex, value: '(~/.aws/credentials|~/.config/rclone/rclone\\.conf|/etc/.*rclone.*\\.conf)'}
+    derive_tags: ["T1552.001"]    # Credentials in Files
+
+  - slot_id: assume_role
+    slot_ttl_sec: 900
+    fact: Exec
+    where:
+      - {field: exe, op: eq, value: "aws"}
+      - {field: cmd, op: regex, value: 'sts\\s+assume-role|--role-arn|--profile'}
+    derive_tags: ["T1078", "T1550.001"]    # Valid Accounts, Application Access Token
+
+  - slot_id: src_data_paths
+    slot_ttl_sec: 900
+    fact: FileIO
+    where:
+      - {field: op, op: in, value: [read, open]}
+      - {field: topdir, op: in, value: [/home, /srv, /var/www, /mnt, /opt, /data]}
+      - {field: __agg.kind, op: eq, value: "file_read_burst"}
+      - {field: __agg.files, op: gte, value: 1000}
+    derive_tags: ["T1039"]    # Data from Network Shared Drive / local dirs
+
+forbidden:
+  - slot_id: first_party_backup
+    slot_ttl_sec: 1200
+    fact: Exec
+    where:
+      - {field: signer, op: eq, value: "first_party_backup"}
+      - {field: cmd, op: regex, value: "(backup|snapshot|policy)"}
+
+vendor_map:
+  - {product: CrowdStrike, alert_type: "Suspicious data exfiltration", fills_slot: outbound_volume}
+  - {product: Elastic, alert_type: "Cloud CLI suspicious usage", fills_slot: exfil_tool_exec}
+  - {product: AWS, alert_type: "AssumeRole unusual", fills_slot: assume_role}
+
+explain:
+  primary_ttp: T1567.002
+  narrative: >
+    Cloud exfil tooling executed with recursive copy/sync semantics, together with large outbound
+    egress volume in a short window. Optional credentials access and AssumeRole activity increase confidence.
+title: Data Exfil via Cloud CLI / rclone (Linux)
+reason_code: CLOUD_CLI_EXFIL_LINUX_AWS_RCLONE
+rules: []

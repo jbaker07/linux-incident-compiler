@@ -1,0 +1,83 @@
+id: pb_crypto_miner_linux_pool_cpu_gpu
+version: 0.3
+name: Cryptominer (Linux): Pool + CPU/GPU Hijack
+severity: high
+description: >
+  Detects host-based cryptomining by correlating miner binaries, Stratum/pool comms,
+  and sustained compute pressure. Optional config/persistence artifacts increase confidence.
+window_sec: 900
+cooldown_sec: 3600
+
+required:
+  - slot_id: miner_exec
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "(/usr/bin/)?(xmrig|xmr-stak|nanominer|lolminer|nbminer|bminer|trex|ethminer|minerd|cpuminer|cgminer|sgminer|xmrig-nvidia|xmrig-amd)$" }
+      - { field: cmd, op: regex, value: "(--url|--algo|-o\s+stratum\+tcp|stratum\+ssl|pool)" }
+    derive_tags: [ "T1496", "T1059" ]  # Resource Hijacking, Command/Scripting
+
+  - slot_id: pool_comms
+    slot_ttl_sec: 600
+    fact: NetFlow
+    where:
+      - { field: proto, op: in, value: [tcp] }
+      - { field: dst_port, op: in, value: [3333, 4444, 5555, 7777, 14444, 3334, 1688] }  # common pools
+      - { field: sni_host, op: regex, value: "(pool|mine|stratum)\." }
+      - { field: __agg.kind, op: eq, value: "longlived_flow" }
+      - { field: __agg.duration_sec, op: gte, value: 300 }
+    derive_tags: [ "T1496", "T1071" ]  # Application Layer Protocol
+
+  - slot_id: sustained_compute
+    slot_ttl_sec: 900
+    fact: HostPerf
+    where:
+      - { field: cpu_user_pct, op: gte, value: 85 }
+      - { field: __agg.kind, op: eq, value: "sustained" }
+      - { field: __agg.window_sec, op: gte, value: 300 }
+    derive_tags: [ "T1496" ]
+
+optional:
+  - slot_id: gpu_pressure
+    slot_ttl_sec: 900
+    fact: HostPerf
+    where:
+      - { field: gpu_util_pct, op: gte, value: 75 }
+      - { field: __agg.kind, op: eq, value: "sustained" }
+      - { field: __agg.window_sec, op: gte, value: 300 }
+    derive_tags: [ "T1496" ]
+
+  - slot_id: config_artifacts
+    slot_ttl_sec: 900
+    fact: FileIO
+    where:
+      - { field: op, op: in, value: [write, rename, create] }
+      - { field: path, op: regex, value: "(/etc/|~/.config/|/var/tmp/).*(miner.*\.json|config\.json|pools\.txt|wallet|\.cfg)$" }
+    derive_tags: [ "T1036" ]  # Masquerading (common with miners)
+
+  - slot_id: persistence
+    slot_ttl_sec: 1200
+    fact: Exec
+    where:
+      - { field: cmd, op: regex, value: "(systemctl\s+enable|crontab\s+-e|echo\s+.+\s+>\s+/etc/cron\.d/)" }
+    derive_tags: [ "T1053", "T1543.002" ]  # Scheduled Task, Systemd Service
+
+forbidden:
+  - slot_id: ml_training_job
+    slot_ttl_sec: 1200
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(python|python3|torchrun|horovodrun)$" }
+      - { field: cmd, op: regex, value: "(train|fit|epoch|pytorch|tensorflow)" }
+    derive_tags: [ "benign_ml_training" ]
+
+vendor_map:
+  - { product: CrowdStrike, alert_type: "Cryptomining behavior", fills_slot: miner_exec }
+  - { product: Elastic, alert_type: "Stratum protocol to mining pool", fills_slot: pool_comms }
+  - { product: Datadog, alert_type: "High CPU usage sustained", fills_slot: sustained_compute }
+
+explain:
+  primary_ttp: T1496
+  narrative: >
+    Miner process observed with Stratum/pool communications and sustained compute pressure.
+    Optional GPU usage, config artifacts, or persistence further increase confidence.

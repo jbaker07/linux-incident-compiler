@@ -1,0 +1,60 @@
+id: pb_outage_ransomware_linux_intermit_encrypt
+version: 0.3
+name: Ransomware (Linux): Intermittent/Partial Encryption
+severity: high
+description: Detects partial-block encryption patterns (many short writes+rename) that evade naive entropy/I/O thresholds.
+window_sec: 1800
+cooldown_sec: 3600
+context_keys: [host, user]
+
+required:
+  - slot_id: file_intermit_burst
+    slot_ttl_sec: 900
+    fact: FileIO
+    where:
+      - { field: op, op: in, value: [write, rename] }
+      - { field: __agg.kind, op: eq, value: partial_encrypt_burst }
+      - { field: __agg.files, op: gte, value: 800 }
+      - { field: __agg.avg_write_kib, op: lte, value: 32 }      # short-write signature
+      - { field: __agg.rename_ratio, op: gte, value: 0.6 }      # many renames
+      - { field: __agg.window_sec, op: lte, value: 900 }
+    derive_tags: [ "T1486" ]
+
+optional:
+  - slot_id: worker_fanout
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - { field: __agg.kind, op: eq, value: proc_burst_workers }
+      - { field: __agg.children, op: gte, value: 12 }
+    derive_tags: [ "T1059" ]
+
+  - slot_id: ransom_notes
+    slot_ttl_sec: 1800
+    fact: FileIO
+    where:
+      - { field: filename, op: regex, value: "(README|HOW_TO_DECRYPT|RECOVER_FILES)\\.(txt|html)$" }
+      - { field: __agg.distinct_dirs, op: gte, value: 30 }
+    derive_tags: [ "T1486" ]
+
+links:
+  - { from: worker_fanout, to: file_intermit_burst, requires: [same_host, same_user], follows_within_sec: 900 }
+  - { from: ransom_notes, to: file_intermit_burst, requires: [same_host], follows_within_sec: 1800 }
+
+forbidden:
+  - slot_id: package_manager_burst
+    slot_ttl_sec: 1200
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(?:/usr/(?:local/)?bin/)?(apt|apt-get|dpkg|yum|dnf|rpm)$" }
+
+emit_ground_truth: true
+
+explain:
+  primary_ttp: T1486
+  steps_template:
+    - "Partial-encryption signature: {{file_intermit_burst.__agg.files}} files; avg write {{file_intermit_burst.__agg.avg_write_kib}} KiB; rename ratio {{file_intermit_burst.__agg.rename_ratio}}."
+    - "{{#if worker_fanout}}Worker burst: {{worker_fanout.__agg.children}} children.{{/if}}"
+    - "{{#if ransom_notes}}Ransom notes dropped in {{ransom_notes.__agg.distinct_dirs}} dirs.{{/if}}"
+  narrative: >
+    High-confidence partial-encryption burst with short writes and heavy renames. Optional worker fan-out and ransom notes add corroboration.

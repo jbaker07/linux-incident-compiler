@@ -1,0 +1,10 @@
+id: pb_outage_cloud_iam_lockuot
+name: Pb Outage Cloud Iam Lockuot
+version: 1
+severity: medium
+window_sec: 900
+cooldown_sec: 300
+description: n/a
+title: Pb Outage Cloud Iam Lockuot
+reason_code: OUTAGE_CLOUD_IAM_LOCKUOT
+rules: []

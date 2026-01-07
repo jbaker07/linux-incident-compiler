@@ -1,0 +1,61 @@
+id: pb_lateral_linux_ssh_portforward_pivot
+version: 0.2
+name: Lateral Pivot: SSH Port Forward + Internal Fan‑Out (Linux)
+severity: high
+description: Correlates inbound SSH access with local port forwarding and rapid connections to new internal hosts.
+window_sec: 1800
+cooldown_sec: 3600
+
+required:
+  - slot_id: inbound_ssh_success
+    slot_ttl_sec: 600
+    fact: Auth
+    where:
+      - { field: method, op: eq, value: ssh }
+      - { field: result, op: eq, value: success }
+      - { field: src_ip, op: not_in_cidr, value: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16] }  # external
+    derive_tags: [ "T1078", "T1021.004" ]
+
+  - slot_id: ssh_port_forward_proc
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(?:/usr/bin/)?ssh$" }
+      - { field: cmd, op: regex, value: "\\s-(L|R|D)\\s" }
+    derive_tags: [ "T1090.001" ]  # Internal Proxy
+
+optional:
+  - slot_id: internal_fanout
+    slot_ttl_sec: 900
+    fact: NetConn
+    where:
+      - { field: dst_ip, op: in_cidr, value: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16] }
+      - { field: __agg.kind, op: eq, value: fanout }
+      - { field: __agg.distinct_dsts, op: gte, value: 8 }
+      - { field: __agg.window_sec, op: lte, value: 900 }
+    derive_tags: [ "T1046" ]  # Network Service Discovery
+
+  - slot_id: privilege_escalation
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - { field: cmd, op: regex, value: "^(su|sudo)\\s" }
+    derive_tags: [ "T1068", "T1078" ]
+
+forbidden:
+  - slot_id: bastion_host
+    slot_ttl_sec: 1800
+    fact: Host
+    where:
+      - { field: role, op: eq, value: bastion }
+      - { field: policy.allow_portforward, op: eq, value: true }
+
+vendor_map:
+  - { product: CrowdStrike, alert_type: "SSH port forward", fills_slot: ssh_port_forward_proc }
+  - { product: Elastic, alert_type: "Network scan", fills_slot: internal_fanout }
+
+explain:
+  primary_ttp: [T1021.004, T1090.001, T1046]
+  narrative: >
+    External SSH login followed by local port forwarding and rapid internal fan-out suggests a lateral pivot.
+    Optional privilege escalation strengthens impact/severity.

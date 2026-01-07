@@ -1,0 +1,72 @@
+id: pb_webshell_reverse_shell_linux
+version: 1
+name: Webshell -> Reverse Shell (Linux)
+severity: high
+description: >
+  Detects a reverse shell launched from a web server context, correlating parent webserver,
+  suspicious shell args, and outbound C2 connection. Optional webroot write increases confidence.
+window_sec: 600
+cooldown_sec: 1800
+
+required:
+  - slot_id: web_to_shell_exec
+    slot_ttl_sec: 300
+    fact: Exec
+    where:
+      - {field: parent_exe, op: regex, value: "^(nginx|apache2|httpd|php-fpm|uwsgi|gunicorn)$"}
+      - {field: exe, op: regex, value: "^(bash|sh|dash|ksh|zsh|perl|python3?)$"}
+      - {field: cmd, op: regex, value: '(bash\s+-i|/dev/tcp/|curl\s+.*\|\s*sh|wget\s+.*\|\s*sh|python\s+-c\s+import\ssocket|perl\s+-e\s+''?use\s+Socket)'}
+    derive_tags: ["T1505.003", "T1059"]    # Web Shell, Command/Scripting
+
+  - slot_id: outbound_rev_c2
+    slot_ttl_sec: 300
+    fact: NetFlow
+    where:
+      - {field: src_proc, op: in_slot, value: web_to_shell_exec}
+      - {field: dst_ip_is_private, op: eq, value: false}
+      - {field: __agg.kind, op: eq, value: "longlived_flow"}
+      - {field: __agg.duration_sec, op: gte, value: 60}
+      - {field: proto, op: in, value: [tcp]}
+    derive_tags: ["T1105", "T1071"]    # Ingress Tool Transfer / App Protocol
+
+optional:
+  - slot_id: webroot_write
+    slot_ttl_sec: 900
+    fact: FileIO
+    where:
+      - {field: op, op: in, value: [write, create]}
+      - {field: path, op: regex, value: '(/var/www|/srv/www|/usr/share/nginx/html|/var/www/html)/.*\.(php|jsp|asp|js|sh)$'}
+    derive_tags: ["T1059", "T1505.003"]
+
+  - slot_id: suspicious_headers
+    slot_ttl_sec: 120
+    fact: HttpReq
+    where:
+      - {field: method, op: in, value: [POST, PUT]}
+      - {field: content_type, op: regex, value: "(multipart/form-data|application/x-php)"}
+      - {field: __agg.kind, op: eq, value: "burst"}
+      - {field: __agg.count, op: gte, value: 5}
+    derive_tags: ["T1190"]    # Exploit Public-Facing App (heuristic)
+
+forbidden:
+  - slot_id: admin_maintenance
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: user, op: regex, value: "^(admin|devops|svc-).*"}
+      - {field: src_ip_is_corporate, op: eq, value: true}
+      - {field: cmd, op: regex, value: "(backup|deploy|migrate|letsencrypt)"}
+
+vendor_map:
+  - {product: WAF, alert_type: "Webshell upload", fills_slot: webroot_write}
+  - {product: CrowdStrike, alert_type: "Shell spawned by webserver", fills_slot: web_to_shell_exec}
+  - {product: Elastic, alert_type: "Outbound long-lived connection", fills_slot: outbound_rev_c2}
+
+explain:
+  primary_ttp: T1505.003
+  narrative: >
+    A shell was spawned directly by a webserver process with reverse-shell indicators and established an
+    external long-lived connection. Optional webroot writes and HTTP anomalies add corroboration.
+title: Webshell -> Reverse Shell (Linux)
+reason_code: WEBSHELL_REVERSE_SHELL_LINUX
+rules: []

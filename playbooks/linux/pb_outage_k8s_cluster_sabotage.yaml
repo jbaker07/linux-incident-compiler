@@ -1,0 +1,55 @@
+id: pb_outage_k8s_cluster_sabotage
+version: 1
+name: Kubernetes Cluster Sabotage (Delete/Scale-to-0)
+severity: high
+description: Detects mass delete/scale events likely to cause application outage.
+window_sec: 1800
+cooldown_sec: 3600
+
+required:
+  - slot_id: mass_delete
+    slot_ttl_sec: 900
+    fact: K8sEvent
+    where:
+      - {field: verb, op: in, value: [delete, scale]}
+      - {field: __agg.kind, op: eq, value: k8s_mass}
+      - {field: __agg.resources, op: gte, value: 10}
+      - {field: __agg.namespaces, op: gte, value: 2}
+    derive_tags: ["T1490"]
+
+  - slot_id: actor_anom
+    slot_ttl_sec: 900
+    fact: K8sEvent
+    where:
+      - {field: actor, op: not_contains, value: "ci-bot"}
+      - {field: actor, op: not_contains, value: "deploy-automator"}
+    derive_tags: ["T1078"]
+
+optional:
+  - slot_id: service_account_abuse
+    slot_ttl_sec: 900
+    fact: RuleHit
+    where:
+      - {field: ttp, op: eq, value: "T1558.003"}    # Svc Account Token
+    derive_tags: ["T1558.003"]
+
+forbidden:
+  - slot_id: rollout
+    slot_ttl_sec: 900
+    fact: VendorAlert
+    where:
+      - {field: product, op: eq, value: "ArgoCD"}
+      - {field: type, op: eq, value: "Planned Rollout"}
+
+vendor_map:
+  - {product: KubernetesAudit, alert_type: "Delete Deployment", fills_slot: mass_delete}
+  - {product: KubernetesAudit, alert_type: "Scale Deployment", fills_slot: mass_delete}
+
+explain:
+  primary_ttp: T1490
+  narrative: >
+    Multiple deletions or scale‑to‑zero actions across namespaces by a non‑automation actor indicate deliberate
+    service disruption in Kubernetes.
+title: Kubernetes Cluster Sabotage (Delete/Scale-to-0)
+reason_code: OUTAGE_K8S_CLUSTER_SABOTAGE
+rules: []

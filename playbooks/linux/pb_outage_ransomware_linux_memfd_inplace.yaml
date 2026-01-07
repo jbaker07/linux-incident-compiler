@@ -1,0 +1,62 @@
+# playbooks/pb_outage_ransomware_linux_memfd_inplace.yaml
+id: pb_outage_ransomware_linux_memfd_inplace
+version: 1
+name: "Ransomware (Linux): In-place Crypto (memfd/RWX, no renames)"
+severity: high
+description: Detects memory-assisted/in-place encryption where files are overwritten without mass renames.
+window_sec: 900
+cooldown_sec: 3600
+
+required:
+  - slot_id: rwx_or_memfd_event
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: tags_any, op: in, value: [RWX_MAP, MEMFD_EXEC]}
+    derive_tags: ["T1055", "T1620"]
+
+  - slot_id: file_write_burst_no_rename
+    slot_ttl_sec: 480
+    fact: FileIO
+    where:
+      - {field: op, op: eq, value: write}
+      - {field: topdir, op: in, value: [/home, /var/www, /srv, /mnt, /opt]}
+      - {field: __agg.kind, op: eq, value: file_burst}
+      - {field: __agg.files, op: gte, value: 600}
+      - {field: __agg.distinct_topdirs, op: gte, value: 3}
+      - {field: __agg.rename_ratio, op: lte, value: 0.05}     # in-place overwrite (few renames)
+      - {field: __agg.window_sec, op: lte, value: 480}
+    derive_tags: ["T1486"]
+
+optional:
+  - slot_id: crypto_tooling_present
+    slot_ttl_sec: 300
+    fact: Exec
+    where:
+      - {field: exe, op: regex, value: "^(?:/usr/bin/)?(openssl|gpg|age)$"}
+  - slot_id: dpkg_libcrypto_loaded
+    slot_ttl_sec: 300
+    fact: Exec
+    where:
+      - {field: cmd, op: contains, value: "libcrypto"}
+
+forbidden:
+  - slot_id: system_upgrade_burst
+    slot_ttl_sec: 1200
+    fact: Exec
+    where:
+      - {field: exe, op: in, value: [/usr/bin/apt, /usr/bin/dpkg, /usr/bin/pacman, /usr/bin/rpm]}
+      - {field: cmd, op: regex, value: "(upgrade|dist-upgrade|full-upgrade|--sync)"}
+
+vendor_map:
+  - {product: CrowdStrike, alert_type: "RWX memory mapping detected", fills_slot: rwx_or_memfd_event}
+  - {product: Elastic, alert_type: "Mass file writes without renames", fills_slot: file_write_burst_no_rename}
+
+explain:
+  primary_ttp: T1486
+  narrative: >
+    RWX or memfd execution paired with a high-volume write burst and very low rename ratio indicates
+    in-place encryption prior to ransom note deployment.
+title: "Ransomware (Linux): In-place Crypto (memfd/RWX, no renames)"
+reason_code: OUTAGE_RANSOMWARE_LINUX_MEMFD_INPLACE
+rules: []

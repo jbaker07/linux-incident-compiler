@@ -1,0 +1,55 @@
+# playbooks/pb_outage_ransomware_linux_db_impact.yaml
+id: pb_outage_ransomware_linux_db_impact
+version: 1
+name: "Ransomware (Linux): DB-Centric Impact (DROP/ALTER/ENCRYPT + datafile churn)"
+severity: high
+description: Detects destructive DB commands and concurrent churn in database storage paths.
+window_sec: 1200
+cooldown_sec: 5400
+
+required:
+  - slot_id: db_client_exec
+    slot_ttl_sec: 900
+    fact: Exec
+    where:
+      - {field: exe, op: regex, value: ".*/(psql|mysql|mariadb|mongo|mongosh)$"}
+
+  - slot_id: destructive_sql_cmd
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: cmd, op: regex, value: "(DROP\\s+TABLE|TRUNCATE\\s+TABLE|ALTER\\s+TABLE|ENCRYPTION\\s*=|\\bPRAGMA\\s+key=)"}
+
+  - slot_id: db_storage_file_churn
+    slot_ttl_sec: 900
+    fact: FileIO
+    where:
+      - {field: op, op: in, value: [write, rename, delete]}
+      - {field: path, op: regex, value: "(/var/lib/postgresql/.*|/var/lib/mysql/.*|/var/lib/mongo/.*)"}
+      - {field: __agg.kind, op: eq, value: file_burst}
+      - {field: __agg.files, op: gte, value: 400}
+      - {field: __agg.window_sec, op: lte, value: 900}
+
+optional:
+  - slot_id: db_service_restart
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: cmd, op: regex, value: "systemctl\\s+(restart|stop)\\s+(postgresql|mysql|mariadb|mongod)"}
+    derive_tags: ["T1490"]
+
+forbidden:
+  - slot_id: migration_job
+    slot_ttl_sec: 1800
+    fact: Exec
+    where:
+      - {field: cmd, op: regex, value: "(liquibase|flyway|pt-online-schema-change)"}
+
+explain:
+  primary_ttp: T1485
+  narrative: >
+    Destructive DB commands plus churn in DB data directories indicate data destruction or encryption at
+    the datastore layer, frequently preceding ransom notes.
+title: "Ransomware (Linux): DB-Centric Impact (DROP/ALTER/ENCRYPT + datafile churn)"
+reason_code: OUTAGE_RANSOMWARE_LINUX_DB_IMPACT
+rules: []

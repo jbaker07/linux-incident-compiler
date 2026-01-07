@@ -1,0 +1,56 @@
+# playbooks/pb_outage_ransomware_linux_fuse_overlay.yaml
+id: pb_outage_ransomware_linux_fuse_overlay
+version: 1
+name: "Ransomware (Linux): FUSE Overlay / On-the-fly Encryption"
+severity: high
+description: Detects attackers mounting a FUSE filesystem and rapidly modifying files beneath it.
+window_sec: 1200
+cooldown_sec: 3600
+
+required:
+  - slot_id: fuse_mount_exec
+    slot_ttl_sec: 600
+    fact: Exec
+    where:
+      - {field: exe, op: regex, value: ".*/(fusermount|mount\\.fuse|mergerfs|unionfs-fuse)$"}
+      - {field: cmd, op: contains, value: "mount"}
+    derive_tags: ["T1547"]
+
+  - slot_id: burst_under_common_mount_roots
+    slot_ttl_sec: 600
+    fact: FileIO
+    where:
+      - {field: op, op: in, value: [write, rename]}
+      - {field: topdir, op: in, value: [/mnt, /media, /run/user, /home, /srv]}
+      - {field: __agg.kind, op: eq, value: file_burst}
+      - {field: __agg.files, op: gte, value: 500}
+      - {field: __agg.window_sec, op: lte, value: 600}
+    derive_tags: ["T1486"]
+
+optional:
+  - slot_id: rename_new_exts
+    slot_ttl_sec: 420
+    fact: FileIO
+    where:
+      - {field: op, op: eq, value: rename}
+      - {field: ext_new, op: in, value: [.enc, .lock, .crypt, .encrypted]}
+
+forbidden:
+  - slot_id: known_backup_fuse
+    slot_ttl_sec: 900
+    fact: Exec
+    where:
+      - {field: signer, op: eq, value: first_party_backup}
+      - {field: cmd, op: regex, value: "(borg|restic|duplicity)"}
+
+vendor_map:
+  - {product: Elastic, alert_type: "FUSE mount suspicious behavior", fills_slot: fuse_mount_exec}
+
+explain:
+  primary_ttp: T1486
+  narrative: >
+    A recent FUSE mount followed by a concentrated file burst under common mount roots suggests a
+    pass-through encryption overlay. Extension renames strengthen confidence.
+title: "Ransomware (Linux): FUSE Overlay / On-the-fly Encryption"
+reason_code: OUTAGE_RANSOMWARE_LINUX_FUSE_OVERLAY
+rules: []

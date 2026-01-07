@@ -1,0 +1,67 @@
+id: pb_outage_ransomware_linux_exfil_then_encrypt
+version: 0.3
+name: Ransomware (Linux): Exfiltration then Encryption
+severity: high
+description: Detects data theft preceding encryption (double extortion): cloud exfil + later file burst.
+window_sec: 21600      # 6h to catch exfil well before encryption
+cooldown_sec: 7200
+context_keys: [host, user]
+
+required:
+  - slot_id: exfil_tools
+    slot_ttl_sec: 10800
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(?:/usr/(?:local/)?bin/)?(rclone|megacmd|aws|azcopy|gsutil|scp|rsync)$" }
+      - { field: cmd, op: contains_any, value: [copy, sync, cp, upload, put] }
+    derive_tags: [ "T1041", "T1567.002" ]  # Exfil; exfil to cloud
+
+  - slot_id: exfil_volume
+    slot_ttl_sec: 10800
+    fact: NetIO
+    where:
+      - { field: __agg.kind, op: eq, value: egress_bytes_burst }
+      - { field: __agg.bytes_out_mb, op: gte, value: 2048 }   # >= 2 GB egress
+      - { field: __agg.distinct_dests, op: gte, value: 2 }    # multiple endpoints/buckets
+    derive_tags: [ "T1041" ]
+
+  - slot_id: file_burst
+    slot_ttl_sec: 1200
+    fact: FileIO
+    where:
+      - { field: __agg.kind, op: eq, value: file_burst }
+      - { field: __agg.files, op: gte, value: 400 }
+      - { field: __agg.window_sec, op: lte, value: 1200 }
+    derive_tags: [ "T1486" ]
+
+optional:
+  - slot_id: ransom_notes
+    slot_ttl_sec: 1800
+    fact: FileIO
+    where:
+      - { field: filename, op: regex, value: "(README|DECRYPT|RECOVER)_.*\\.(txt|html)$" }
+      - { field: __agg.distinct_dirs, op: gte, value: 25 }
+    derive_tags: [ "T1486" ]
+
+links:
+  - { from: exfil_tools, to: exfil_volume, requires: [same_host, same_user], follows_within_sec: 3600 }
+  - { from: exfil_volume, to: file_burst, requires: [same_host, same_user], follows_within_sec: 14400 }  # exfil can precede by hours
+  - { from: ransom_notes, to: file_burst, requires: [same_host], follows_within_sec: 1800 }
+
+forbidden:
+  - slot_id: corporate_backup_egress
+    slot_ttl_sec: 14400
+    fact: Exec
+    where:
+      - { field: exe, op: regex, value: "^(?:/opt|/usr)/(veeam|netbackup|cohesity|rubrik|commvault)/" }
+
+emit_ground_truth: true
+
+explain:
+  primary_ttp: T1041
+  steps_template:
+    - "Exfil tooling executed: {{exfil_tools.exe}} {{exfil_tools.cmd}}."
+    - "Large egress: {{exfil_volume.__agg.bytes_out_mb}} MB to {{exfil_volume.__agg.distinct_dests}} destinations."
+    - "Subsequent encryption burst: {{file_burst.__agg.files}} files in {{file_burst.__agg.window_sec}}s."
+  narrative: >
+    Data exfiltration preceding a file-encryption burst indicates double-extortion ransomware. Optional ransom notes further corroborate.
