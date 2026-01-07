@@ -1,0 +1,51 @@
+{
+  "$schema": "./allowlist.schema.json",
+  "version": "1.0",
+  "description": "Canonical artifact allowlist for Linux EDR release builds.",
+  
+  "allowed_binaries": [
+    "edr-server",
+    "edr-locald",
+    "capture_linux_rotating"
+  ],
+  
+  "forbidden_binaries": [
+    "license_gen",
+    "golden-cli",
+    "proof_run",
+    "metrics_run",
+    "explain_harness",
+    "agent-linux"
+  ],
+  
+  "required_dirs": [
+    "ui"
+  ],
+  
+  "required_docs": [
+    "README.md"
+  ],
+  
+  "optional_docs": [
+    "LICENSING.md"
+  ],
+  
+  "generated_files": [
+    "MANIFEST.txt",
+    "SHA256SUMS.txt"
+  ],
+  
+  "expected_ui_files": [
+    "ui/app.js",
+    "ui/index.html",
+    "ui/graph.html",
+    "ui/loading.html",
+    "ui/workbench.html"
+  ],
+  
+  "notes": {
+    "license_gen": "NEVER SHIP - vendor-only tool that handles private key",
+    "golden-cli": "Internal testing tool only",
+    "agent-linux": "Library crate artifact, not needed in release"
+  }
+}
