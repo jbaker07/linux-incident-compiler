@@ -3,9 +3,8 @@
 //! Uses Aya framework for ringbuf/perf polling with real event reading
 
 use anyhow::{anyhow, Result};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "with-ebpf"))]
 use aya::maps::RingBuf;
 #[cfg(target_os = "linux")]
 use std::fs;
@@ -119,8 +118,8 @@ pub struct RingbufStream {
     transport_kind: TransportKind,
     loss_metrics: LossMetrics,
     events_read_total: u64,
-    #[cfg(target_os = "linux")]
-    ring_buf: Option<RingBuf>,
+    // RingBuf would go here in full implementation
+    // Disabled until aya integration is complete
 }
 
 impl RingbufStream {
@@ -142,7 +141,6 @@ impl RingbufStream {
                         transport_kind: TransportKind::Ringbuf,
                         loss_metrics: LossMetrics::default(),
                         events_read_total: 0,
-                        ring_buf: Some(RingBuf::new()),
                     })
                 }
                 Err(_) => Err(anyhow!("ringbuf map not found at {}", map_path)),
@@ -273,6 +271,12 @@ impl EbpfEventStream for PerfStream {
 /// Null transport (graceful degradation when eBPF unavailable)
 pub struct NullStream {
     loss_metrics: LossMetrics,
+}
+
+impl Default for NullStream {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NullStream {

@@ -1,8 +1,8 @@
-/// Unit tests for eBPF event decoder
-/// Ensures: no panics, decode_failed increments correctly
+//! Unit tests for eBPF event decoder
+//! Ensures: no panics, decode_failed increments correctly
 
 #[cfg(test)]
-mod tests {
+mod ebpf_tests {
     use crate::ebpf::{EbpfEventStream, MockEbpfStream, RawEbpfEvent};
 
     #[test]

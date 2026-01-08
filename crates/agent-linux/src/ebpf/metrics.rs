@@ -1,7 +1,6 @@
 //! eBPF loss metrics collection and reporting
 //! Tracks reserve failures, perf lost samples, decode errors, and backpressure drops
 
-use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Snapshot of eBPF system metrics at a point in time

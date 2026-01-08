@@ -1,5 +1,6 @@
-/// Binary fixture generator for eBPF event testing
-/// Creates .bin files with packed edr_event (384 bytes) records
+//! Binary fixture generator for eBPF event testing
+//! Creates .bin files with packed edr_event (384 bytes) records
+#![allow(clippy::field_reassign_with_default)]
 use crate::ebpf::RawEbpfEvent;
 use anyhow::Result;
 use std::fs::File;

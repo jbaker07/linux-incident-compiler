@@ -14,6 +14,7 @@ use edr_core::{Event, EvidencePtr};
 use edr_locald::explanation_builder::build_explanation_from_hypothesis;
 use edr_locald::hypothesis::Fact;
 use edr_locald::hypothesis_controller::HypothesisController;
+use edr_locald::load_metrics::{db_metrics, locald_metrics};
 use edr_locald::os::windows::{extract_facts, windows_playbooks, WindowsSignalEngine};
 use edr_locald::scoring::ScoringEngine;
 use edr_locald::signal_result::SignalResult;
@@ -25,7 +26,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Get telemetry root from env or default
 fn get_telemetry_root() -> PathBuf {
@@ -330,6 +331,9 @@ fn main() {
 
                     eprintln!("[ingest] Processing: {}", entry_path);
 
+                    // Track segment processing for load metrics
+                    locald_metrics().record_segment_seen();
+
                     if let Ok(content) = fs::read_to_string(&segment_path) {
                         let mut segment_events = 0u32;
                         let mut segment_facts = 0u32;
@@ -346,7 +350,10 @@ fn main() {
                                 segment_events += 1;
 
                                 // === FULL PIPELINE: Extract Facts ===
+                                let fact_start = Instant::now();
                                 let facts = extract_facts(&event);
+                                locald_metrics()
+                                    .record_fact_extract(fact_start.elapsed().as_millis() as u64);
                                 segment_facts += facts.len() as u32;
 
                                 // === FULL PIPELINE: Feed Facts to HypothesisController ===
@@ -354,8 +361,12 @@ fn main() {
                                     // Store fact for explanation building
                                     facts_store.push(fact.clone());
 
+                                    let playbook_start = Instant::now();
                                     match hypothesis_controller.ingest_fact(fact) {
                                         Ok(affected_hypotheses) => {
+                                            locald_metrics().record_playbook_eval(
+                                                playbook_start.elapsed().as_millis() as u64,
+                                            );
                                             if !affected_hypotheses.is_empty() {
                                                 eprintln!(
                                                     "    [fact] Affected {} hypotheses",
@@ -489,6 +500,14 @@ fn main() {
                         total_facts += segment_facts as u64;
                         total_signals += segment_signals as u64;
 
+                        // Update load metrics for segment completion
+                        locald_metrics().record_segment_processed();
+                        locald_metrics().record_records_processed(segment_events as u64);
+
+                        // Update last processed timestamp for lag calculation
+                        locald_metrics()
+                            .set_last_processed_ts(chrono::Utc::now().timestamp_millis());
+
                         eprintln!(
                             "  [done] {} events, {} facts, {} signals (total: {} events, {} facts, {} signals)",
                             segment_events, segment_facts, segment_signals, total_events, total_facts, total_signals
@@ -497,12 +516,14 @@ fn main() {
 
                     seen_segments.insert(entry_path.clone());
 
-                    // Save checkpoint
+                    // Save checkpoint with timing
                     let checkpoint = seen_segments.iter().cloned().collect::<Vec<_>>().join(",");
+                    let commit_start = Instant::now();
                     let _ = db.execute(
                         "INSERT OR REPLACE INTO locald_checkpoint (key, value) VALUES ('seen_segments', ?1)",
                         params![checkpoint],
                     );
+                    db_metrics().record_txn_commit(commit_start.elapsed().as_millis() as u64);
                 }
             }
         }

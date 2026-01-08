@@ -237,6 +237,7 @@ impl WriteIsolationContext {
         Ok(files)
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_files_recursive(&self, dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
         if dir.is_dir() {
             for entry in fs::read_dir(dir)? {

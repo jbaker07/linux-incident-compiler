@@ -40,6 +40,9 @@ pub mod pipeline;
 pub mod signal_orchestrator;
 pub mod signal_result;
 
+// Load metrics for production readiness
+pub mod load_metrics;
+
 // Platform-agnostic modules
 pub mod baseline;
 pub mod playbook_loader;
@@ -77,6 +80,9 @@ pub mod hypothesis_controller;
 // Integration layer: export incidents + ingest third-party alerts
 pub mod integrations;
 
+// Canonical fact model
+pub mod canonical;
+
 // Main daemon - has legacy dependencies, skip for now
 // pub mod edr_locald;
 
@@ -97,6 +103,10 @@ pub use scoring::{ScoredSignal, ScoringEngine};
 
 // Re-export hypothesis controller
 pub use hypothesis_controller::HypothesisController;
+
+// Re-export fact extractors for each OS
+pub use os::linux::extract_facts as extract_linux_facts;
+pub use os::windows::extract_facts as extract_windows_facts;
 
 // Re-export slot matcher types
 pub use slot_matcher::{

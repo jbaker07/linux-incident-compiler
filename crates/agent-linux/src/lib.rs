@@ -8,6 +8,9 @@
 //! Writes events to the standard run contract format for consumption
 //! by edr-locald and edr-server.
 
+// Re-export edr-core as `core` for module compatibility
+pub use edr_core as core;
+
 pub mod capture;
 pub mod host;
 
@@ -16,4 +19,4 @@ pub mod ebpf;
 
 // Re-exports
 pub use capture::{CaptureConfig, CaptureWriter, SharedCaptureWriter};
-pub use host::HostInfo;
+pub use host::{HostCtx, HostInfo};

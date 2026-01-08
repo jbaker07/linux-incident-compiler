@@ -1,13 +1,48 @@
 //! Decoupled eBPF event reader
 //! Hot-path reads ringbuf/perf into bounded MPSC queue
 //! Separate thread decodes to core::Event without blocking reader
+//!
+//! Memory Bound: queue_capacity * sizeof(RawEbpfEvent) ≈ 10000 * 512 = ~5MB
+//! Backpressure: Low-priority events dropped first, Critical always kept
 
 use crate::core::Event;
-use crate::ebpf::{EbpfEventStream, MetricsCollector, RawEbpfEvent, TransportKind};
+use crate::ebpf::{MetricsCollector, RawEbpfEvent};
 use anyhow::Result;
-use std::sync::mpsc::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
+
+/// Global counters for load metrics integration (thread-safe)
+static QUEUE_DEPTH: AtomicUsize = AtomicUsize::new(0);
+static QUEUE_DROPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static EVENTS_READ_TOTAL: AtomicU64 = AtomicU64::new(0);
+static EVENTS_DROPPED_KERNEL: AtomicU64 = AtomicU64::new(0);
+
+/// Get current queue depth for metrics
+pub fn get_queue_depth() -> usize {
+    QUEUE_DEPTH.load(Ordering::Relaxed)
+}
+
+/// Get total events dropped due to queue full
+pub fn get_queue_dropped_total() -> u64 {
+    QUEUE_DROPPED_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Get total events read from ringbuf/perf
+pub fn get_events_read_total() -> u64 {
+    EVENTS_READ_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Get total events dropped by kernel (perf lost)
+pub fn get_events_dropped_kernel() -> u64 {
+    EVENTS_DROPPED_KERNEL.load(Ordering::Relaxed)
+}
+
+/// Record kernel-side event loss (call from perf callback)
+pub fn record_kernel_drop(count: u64) {
+    EVENTS_DROPPED_KERNEL.fetch_add(count, Ordering::Relaxed);
+}
 
 /// Event priority for backpressure drops
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -19,6 +54,7 @@ enum EventPriority {
 
 /// eBPF event with priority info
 struct PrioritizedEbpfEvent {
+    #[allow(dead_code)]
     raw: RawEbpfEvent,
     priority: EventPriority,
 }
@@ -42,7 +78,7 @@ impl PrioritizedEbpfEvent {
 
             // Tier-2+: Low priority (noisy)
             10 | 11 | 12 | 13 | 14 | 15 | 16 | 18 | 19 => EventPriority::Low, // File ops
-            20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 => EventPriority::Low, // Net ops
+            20..=28 => EventPriority::Low,                                    // Net ops
             200 | 201 => EventPriority::Low,                                  // TCP state
 
             _ => EventPriority::Normal,
@@ -74,6 +110,7 @@ impl Default for ReaderConfig {
 
 /// Hot-path reader thread handle
 pub struct EbpfReader {
+    #[allow(dead_code)]
     tx: Sender<RawEbpfEvent>,
     rx: Receiver<RawEbpfEvent>,
     metrics: MetricsCollector,
@@ -83,6 +120,7 @@ impl EbpfReader {
     pub fn new(config: ReaderConfig) -> (Self, thread::JoinHandle<Result<()>>) {
         let (tx, rx) = bounded(config.queue_capacity);
         let tx_clone = tx.clone();
+        let _queue_cap = config.queue_capacity;
 
         let reader_thread = thread::spawn(move || {
             let mut stream = crate::ebpf::select_ebpf_stream(None);
@@ -92,51 +130,46 @@ impl EbpfReader {
                 match stream.poll(config.poll_timeout_ms) {
                     Ok(events) => {
                         for raw in events {
-                            let _prio_event = PrioritizedEbpfEvent::from_raw(raw);
+                            let prio_event = PrioritizedEbpfEvent::from_raw(raw);
 
                             // Try to send; drop low-priority on backpressure
                             match tx_clone.try_send(raw) {
-                                Ok(_) => {}
-                                Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                Ok(_) => {
+                                    EVENTS_READ_TOTAL.fetch_add(1, Ordering::Relaxed);
+                                }
+                                Err(TrySendError::Full(_)) => {
                                     // Queue full: drop low-priority, keep critical
-                                    if _prio_event.priority == EventPriority::Critical {
-                                        // Critical: try to wait a bit
-                                        if let Ok(_) = tx_clone.send(raw) {
-                                            // Success after wait
+                                    if prio_event.priority == EventPriority::Critical {
+                                        // Critical: blocking wait (bounded)
+                                        if tx_clone.send(raw).is_ok() {
+                                            EVENTS_READ_TOTAL.fetch_add(1, Ordering::Relaxed);
                                         }
                                     } else {
-                                        // Low/Normal priority: drop
-                                        // Emit health event (rate-limited)
+                                        // Low/Normal priority: drop and count
+                                        QUEUE_DROPPED_TOTAL.fetch_add(1, Ordering::Relaxed);
+
+                                        // Rate-limited backpressure warning
                                         if backpressure_cooldown == 0 {
-                                            // Would emit sensor_health event here
                                             backpressure_cooldown = 100; // 100 poll cycles = ~10s cooldown
                                         }
                                     }
                                 }
-                                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                                Err(TrySendError::Disconnected(_)) => {
                                     return Ok(());
                                 }
                             }
                         }
                     }
                     Err(_e) => {
-                        // Log at debug level would go here
-                        // eprintln!("eBPF stream poll error: {}", _e);
                         thread::sleep(Duration::from_millis(100));
                     }
                 }
 
-                if backpressure_cooldown > 0 {
-                    backpressure_cooldown -= 1;
-                }
+                backpressure_cooldown = backpressure_cooldown.saturating_sub(1);
 
-                // Check if we should exit
-                if tx_clone.is_closed() {
-                    break;
-                }
+                // Check if we should exit (crossbeam doesn't have is_closed, check len == 0 after disconnect)
+                // For now we rely on Disconnected error
             }
-
-            Ok(())
         });
 
         (
@@ -159,12 +192,25 @@ impl EbpfReader {
         self.rx.recv_timeout(timeout).ok()
     }
 
-    /// Drain all pending events
+    /// Drain all pending events and update queue depth metric
     pub fn drain(&mut self) -> Vec<RawEbpfEvent> {
         let mut events = Vec::new();
         while let Ok(evt) = self.rx.try_recv() {
             events.push(evt);
         }
+        // After drain, queue is empty
+        QUEUE_DEPTH.store(0, Ordering::Relaxed);
+        events
+    }
+
+    /// Drain with depth tracking (returns events and updates global depth)
+    pub fn drain_with_depth(&mut self) -> Vec<RawEbpfEvent> {
+        let mut events = Vec::new();
+        while let Ok(evt) = self.rx.try_recv() {
+            events.push(evt);
+        }
+        let depth = events.len();
+        QUEUE_DEPTH.store(depth, Ordering::Relaxed);
         events
     }
 
@@ -176,14 +222,9 @@ impl EbpfReader {
 
 /// Decode RawEbpfEvent to core::Event (enrichment happens in capture layer)
 pub fn decode_ebpf_event(raw: &RawEbpfEvent) -> Result<Event> {
-    let mut event = Event::default();
-
-    // Basic fields
-    event.tags.push(format!("evt_type_{}", raw.evt_type));
-    event.ts_ms = raw.ts / 1_000_000;
+    let mut fields = std::collections::BTreeMap::new();
 
     // Process info
-    let mut fields = std::collections::BTreeMap::new();
     fields.insert(
         "process_id".to_string(),
         serde_json::Value::Number(raw.tgid.into()),
@@ -233,14 +274,15 @@ pub fn decode_ebpf_event(raw: &RawEbpfEvent) -> Result<Event> {
         );
     }
 
+    // Build tags
+    let mut tags = vec![format!("evt_type_{}", raw.evt_type)];
+
     // Paths (truncated)
     let path_str = String::from_utf8_lossy(&raw.path[..])
         .trim_end_matches('\0')
         .to_string();
     if !path_str.is_empty() {
-        event
-            .tags
-            .push(format!("path_{}", path_str.replace('/', "_")));
+        tags.push(format!("path_{}", path_str.replace('/', "_")));
         fields.insert("path".to_string(), serde_json::Value::String(path_str));
     }
 
@@ -256,10 +298,20 @@ pub fn decode_ebpf_event(raw: &RawEbpfEvent) -> Result<Event> {
         .trim_end_matches('\0')
         .to_string();
     if !comm_str.is_empty() {
-        event.tags.push(format!("comm_{}", comm_str));
+        tags.push(format!("comm_{}", comm_str));
     }
 
-    event.fields = fields;
+    // Construct Event
+    let event = Event {
+        ts_ms: (raw.ts / 1_000_000) as i64,
+        host: String::new(), // Filled by capture layer
+        tags,
+        proc_key: None,
+        file_key: None,
+        identity_key: None,
+        evidence_ptr: None,
+        fields,
+    };
 
     Ok(event)
 }
@@ -269,6 +321,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_event_priority_ordering() {
         let mut raw = RawEbpfEvent::default();
         raw.evt_type = 40; // EVT_MPROTECT

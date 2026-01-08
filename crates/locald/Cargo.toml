@@ -46,6 +46,7 @@ hostname = "0.4"  # Proof Run: get system hostname
 regex = "1"  # Slot matcher: regex-based predicate matching
 ctrlc = "3.4"  # Graceful shutdown handling
 clap = { version = "4", features = ["derive"] }  # Explain harness: CLI args
+lazy_static = "1.4"  # Linux fact extraction: thread-safe global caches
 
 [dev-dependencies]
 tempfile = "3"

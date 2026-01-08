@@ -269,17 +269,39 @@ pub fn edr_event_to_core_event(e: &EdREvent) -> Event {
     if e.fam != 0 {
         fields.insert("fam".into(), serde_json::json!(e.fam));
     }
+    
+    // Protocol: map numeric value to string for playbook matching
+    let protocol = match e.proto {
+        6 => "tcp",
+        17 => "udp",
+        1 => "icmp",
+        _ if e.proto != 0 => "other",
+        _ => "tcp", // default
+    };
+    fields.insert("protocol".into(), serde_json::json!(protocol));
+    fields.insert("proto".into(), serde_json::json!(e.proto));
+    
     if e.lport != 0 {
-        fields.insert("local_port".into(), serde_json::json!(port_be_to_u16(e.lport)));
+        let lport = port_be_to_u16(e.lport);
+        fields.insert("local_port".into(), serde_json::json!(lport));
+        fields.insert("sport".into(), serde_json::json!(lport));
     }
     if e.laddr4 != 0 {
-        fields.insert("local_ip".into(), serde_json::json!(ipv4_be_to_string(e.laddr4)));
+        let lip = ipv4_be_to_string(e.laddr4);
+        fields.insert("local_ip".into(), serde_json::json!(lip.clone()));
+        fields.insert("src_ip".into(), serde_json::json!(lip));
     }
     if e.rport != 0 {
-        fields.insert("remote_port".into(), serde_json::json!(port_be_to_u16(e.rport)));
+        let rport = port_be_to_u16(e.rport);
+        fields.insert("remote_port".into(), serde_json::json!(rport));
+        fields.insert("dest_port".into(), serde_json::json!(rport));
+        fields.insert("dport".into(), serde_json::json!(rport));
     }
     if e.raddr4 != 0 {
-        fields.insert("remote_ip".into(), serde_json::json!(ipv4_be_to_string(e.raddr4)));
+        let rip = ipv4_be_to_string(e.raddr4);
+        fields.insert("remote_ip".into(), serde_json::json!(rip.clone()));
+        fields.insert("dest_ip".into(), serde_json::json!(rip.clone()));
+        fields.insert("dst_ip".into(), serde_json::json!(rip));
     }
 
     // Enrich with procfs

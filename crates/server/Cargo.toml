@@ -27,6 +27,7 @@ pro = ["edr-core/pro"]
 [dependencies]
 edr-core = { path = "../core" }
 workbench = { path = "../workbench" }
+edr-locald = { path = "../locald" }
 
 # Web framework
 axum = "0.7"

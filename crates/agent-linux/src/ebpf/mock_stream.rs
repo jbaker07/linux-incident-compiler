@@ -1,15 +1,17 @@
-/// MockEbpfStream reads binary fixture of packed edr_event records
-/// Used for testing without actual kernel attachment
+//! MockEbpfStream reads binary fixture of packed edr_event records
+//! Used for testing without actual kernel attachment
+#![allow(clippy::field_reassign_with_default)]
 use crate::ebpf::{EbpfEventStream, LossMetrics, RawEbpfEvent, TransportKind};
 use anyhow::Result;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 /// Mock eBPF stream reading from binary fixture file
 pub struct MockEbpfStream {
-    reader: Box<dyn Read>,
+    reader: Box<dyn Read + Send>,
     buffer: Vec<u8>,
+    #[allow(dead_code)]
     transport_kind: TransportKind,
     events_read_total: u64,
     loss_metrics: LossMetrics,
@@ -31,7 +33,7 @@ impl MockEbpfStream {
     /// Create from in-memory bytes (for testing)
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         Self {
-            reader: Box::new(std::io::Cursor::new(bytes)),
+            reader: Box::new(Cursor::new(bytes)),
             buffer: vec![0u8; 384 * 1000],
             transport_kind: TransportKind::None,
             events_read_total: 0,
@@ -47,6 +49,7 @@ impl EbpfEventStream for MockEbpfStream {
         let n = self.reader.read(&mut self.buffer[..read_size]).unwrap_or(0);
 
         let mut events = Vec::new();
+        #[allow(unused_variables, unused_assignments)]
         let mut decode_failed = 0;
 
         // Parse each 384-byte record

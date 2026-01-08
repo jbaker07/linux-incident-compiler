@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// Re-export load metrics from locald for use by consumers
+pub use edr_locald::load_metrics::{snapshot_all as snapshot_load_metrics, LoadMetrics};
+
 // ============================================================================
 // Health Response Types
 // ============================================================================
@@ -32,6 +35,8 @@ pub struct HealthResponse {
     pub streams: Vec<StreamHealth>,
     /// Import isolation status
     pub imported: ImportedStatus,
+    /// Load metrics for production monitoring
+    pub load: LoadMetrics,
     /// Overall verdict
     pub verdict: HealthVerdict,
     /// Timestamp of this check
@@ -193,12 +198,16 @@ pub fn check_health(config: &HealthCheckConfig) -> HealthResponse {
         imported_isolated: true, // Always mechanically isolated
     };
 
+    // Load metrics for production monitoring
+    let load = snapshot_load_metrics();
+
     HealthResponse {
         build,
         storage,
         capture,
         streams,
         imported,
+        load,
         verdict,
         checked_at: Utc::now(),
         blocking_issue,
@@ -380,7 +389,7 @@ fn get_disk_free_bytes(path: &Path) -> Option<u64> {
     unsafe {
         let mut stat: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(path_cstr.as_ptr(), &mut stat) == 0 {
-            Some(stat.f_bavail as u64 * stat.f_frsize as u64)
+            Some(stat.f_bavail * stat.f_frsize)
         } else {
             None
         }

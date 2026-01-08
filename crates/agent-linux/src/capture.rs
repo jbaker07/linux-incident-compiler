@@ -33,7 +33,7 @@ impl Default for CaptureConfig {
         Self {
             output_dir: PathBuf::from("./run"),
             events_per_segment: 100_000,
-            segment_duration_secs: 300, // 5 minutes
+            segment_duration_secs: 300,          // 5 minutes
             max_segment_bytes: 50 * 1024 * 1024, // 50 MB
         }
     }
@@ -157,11 +157,10 @@ impl CaptureWriter {
         if let Some(seg) = self.current_segment.take() {
             seg.writer.finish()?;
 
-            let size_bytes = fs::metadata(&seg.path)
-                .map(|m| m.len())
-                .unwrap_or(0);
+            let size_bytes = fs::metadata(&seg.path).map(|m| m.len()).unwrap_or(0);
 
-            let filename = seg.path
+            let filename = seg
+                .path
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
@@ -329,6 +328,3 @@ mod tests {
         assert!(index.segments.len() >= 2); // Should have rotated at least once
     }
 }
-
-
-

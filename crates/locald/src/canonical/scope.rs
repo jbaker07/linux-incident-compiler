@@ -8,7 +8,7 @@
 //! - FileScopeKey: File identity
 
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 /// Process scope key - stable identity beyond PID
 /// ProcKey = hash(host_id + boot_id + start_time + pid + exe_hash + ppid_start_time(optional))
@@ -20,7 +20,7 @@ pub struct ProcScopeKey {
     pub pid: u32,
     pub exe_hash: Option<String>,
     pub ppid_start_time_ns: Option<i64>,
-    
+
     /// Optional container context
     pub container_id: Option<String>,
     pub pid_namespace: Option<u64>,
@@ -45,23 +45,23 @@ impl ProcScopeKey {
             pid_namespace: None,
         }
     }
-    
+
     pub fn with_exe_hash(mut self, hash: impl Into<String>) -> Self {
         self.exe_hash = Some(hash.into());
         self
     }
-    
+
     pub fn with_parent(mut self, ppid_start_time_ns: i64) -> Self {
         self.ppid_start_time_ns = Some(ppid_start_time_ns);
         self
     }
-    
+
     pub fn with_container(mut self, container_id: impl Into<String>, pid_ns: u64) -> Self {
         self.container_id = Some(container_id.into());
         self.pid_namespace = Some(pid_ns);
         self
     }
-    
+
     /// Generate deterministic key hash
     pub fn to_key_string(&self) -> String {
         let mut hasher = Sha256::new();
@@ -72,30 +72,30 @@ impl ProcScopeKey {
         hasher.update(self.start_time_ns.to_le_bytes());
         hasher.update(b"|");
         hasher.update(self.pid.to_le_bytes());
-        
+
         if let Some(ref exe_hash) = self.exe_hash {
             hasher.update(b"|exe:");
             hasher.update(exe_hash.as_bytes());
         }
-        
+
         if let Some(ppid_start) = self.ppid_start_time_ns {
             hasher.update(b"|ppid:");
             hasher.update(ppid_start.to_le_bytes());
         }
-        
+
         if let Some(ref container_id) = self.container_id {
             hasher.update(b"|ctr:");
             hasher.update(container_id.as_bytes());
         }
-        
+
         if let Some(pid_ns) = self.pid_namespace {
             hasher.update(b"|ns:");
             hasher.update(pid_ns.to_le_bytes());
         }
-        
+
         format!("proc:{:x}", hasher.finalize())
     }
-    
+
     /// Check if two keys could refer to the same process (considering PID reuse)
     pub fn could_be_same_process(&self, other: &Self) -> bool {
         self.host_id == other.host_id
@@ -126,28 +126,28 @@ impl UserScopeKey {
             domain: None,
         }
     }
-    
+
     pub fn with_username(mut self, username: impl Into<String>) -> Self {
         self.username = Some(username.into());
         self
     }
-    
+
     pub fn with_domain(mut self, domain: impl Into<String>) -> Self {
         self.domain = Some(domain.into());
         self
     }
-    
+
     pub fn to_key_string(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.host_id.as_bytes());
         hasher.update(b"|");
         hasher.update(self.user_id.as_bytes());
-        
+
         if let Some(ref domain) = self.domain {
             hasher.update(b"|dom:");
             hasher.update(domain.as_bytes());
         }
-        
+
         format!("user:{:x}", hasher.finalize())
     }
 }
@@ -171,28 +171,28 @@ impl ExeScopeKey {
             exe_path: None,
         }
     }
-    
+
     pub fn with_signer(mut self, signer: impl Into<String>) -> Self {
         self.signer = Some(signer.into());
         self
     }
-    
+
     pub fn with_path(mut self, path: impl Into<String>) -> Self {
         self.exe_path = Some(path.into());
         self
     }
-    
+
     pub fn to_key_string(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.host_id.as_bytes());
         hasher.update(b"|");
         hasher.update(self.exe_hash.as_bytes());
-        
+
         if let Some(ref signer) = self.signer {
             hasher.update(b"|sign:");
             hasher.update(signer.as_bytes());
         }
-        
+
         format!("exe:{:x}", hasher.finalize())
     }
 }
@@ -226,7 +226,7 @@ impl SockScopeKey {
             ts_bucket: None,
         }
     }
-    
+
     pub fn from_tuple(
         host_id: impl Into<String>,
         src_ip: impl Into<String>,
@@ -247,16 +247,16 @@ impl SockScopeKey {
             ts_bucket: Some(ts_bucket),
         }
     }
-    
+
     pub fn to_key_string(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.host_id.as_bytes());
-        
+
         if let Some(inode) = self.sock_inode {
             hasher.update(b"|inode:");
             hasher.update(inode.to_le_bytes());
         }
-        
+
         if let Some(ref src_ip) = self.src_ip {
             hasher.update(b"|src:");
             hasher.update(src_ip.as_bytes());
@@ -265,7 +265,7 @@ impl SockScopeKey {
                 hasher.update(port.to_le_bytes());
             }
         }
-        
+
         if let Some(ref dst_ip) = self.dst_ip {
             hasher.update(b"|dst:");
             hasher.update(dst_ip.as_bytes());
@@ -274,17 +274,17 @@ impl SockScopeKey {
                 hasher.update(port.to_le_bytes());
             }
         }
-        
+
         if let Some(ref proto) = self.protocol {
             hasher.update(b"|proto:");
             hasher.update(proto.as_bytes());
         }
-        
+
         if let Some(ts) = self.ts_bucket {
             hasher.update(b"|ts:");
             hasher.update(ts.to_le_bytes());
         }
-        
+
         format!("sock:{:x}", hasher.finalize())
     }
 }
@@ -314,7 +314,7 @@ impl FileScopeKey {
             fs_uuid: None,
         }
     }
-    
+
     pub fn from_file_id(host_id: impl Into<String>, file_id: impl Into<String>) -> Self {
         Self {
             host_id: host_id.into(),
@@ -325,7 +325,7 @@ impl FileScopeKey {
             fs_uuid: None,
         }
     }
-    
+
     pub fn from_path(
         host_id: impl Into<String>,
         path: impl Into<String>,
@@ -340,11 +340,11 @@ impl FileScopeKey {
             fs_uuid: None,
         }
     }
-    
+
     pub fn to_key_string(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.host_id.as_bytes());
-        
+
         if let Some(inode) = self.inode {
             hasher.update(b"|inode:");
             hasher.update(inode.to_le_bytes());
@@ -363,7 +363,7 @@ impl FileScopeKey {
                 hasher.update(fs_uuid.as_bytes());
             }
         }
-        
+
         format!("file:{:x}", hasher.finalize())
     }
 }
@@ -376,7 +376,7 @@ mod tests {
     fn test_proc_key_determinism() {
         let key1 = ProcScopeKey::new("host1", "boot1", 1000000, 1234);
         let key2 = ProcScopeKey::new("host1", "boot1", 1000000, 1234);
-        
+
         assert_eq!(key1.to_key_string(), key2.to_key_string());
     }
 
@@ -385,7 +385,7 @@ mod tests {
         // Same PID but different start times = different keys
         let key1 = ProcScopeKey::new("host1", "boot1", 1000000, 1234);
         let key2 = ProcScopeKey::new("host1", "boot1", 2000000, 1234); // PID reused
-        
+
         assert_ne!(key1.to_key_string(), key2.to_key_string());
         assert!(!key1.could_be_same_process(&key2));
     }
@@ -395,7 +395,7 @@ mod tests {
         // Same PID/start_time but different boot = different keys
         let key1 = ProcScopeKey::new("host1", "boot1", 1000000, 1234);
         let key2 = ProcScopeKey::new("host1", "boot2", 1000000, 1234);
-        
+
         assert_ne!(key1.to_key_string(), key2.to_key_string());
     }
 
@@ -410,7 +410,7 @@ mod tests {
             "tcp",
             1000,
         );
-        
+
         let key_str = key.to_key_string();
         assert!(key_str.starts_with("sock:"));
     }
@@ -419,7 +419,7 @@ mod tests {
     fn test_file_key_windows_vs_unix() {
         let unix_key = FileScopeKey::from_inode("host1", 12345);
         let win_key = FileScopeKey::from_file_id("host1", "0x0000000000001234");
-        
+
         // Both generate valid but different keys
         assert!(unix_key.to_key_string().starts_with("file:"));
         assert!(win_key.to_key_string().starts_with("file:"));

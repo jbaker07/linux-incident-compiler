@@ -2,15 +2,22 @@
 //! Provides minimal shared metadata (hostname, boot_id, uid/gid, timestamp helpers)
 //! Zero dependencies on telemetry/gnn/trust plumbing
 
+use serde::{Deserialize, Serialize};
 use std::fs;
 
 /// Minimal context object passed to all sensors
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HostCtx {
     pub hostname: String,
     pub boot_id: String,
     pub uid: u32,
     pub gid: u32,
+}
+
+impl Default for HostCtx {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HostCtx {
@@ -54,6 +61,16 @@ impl HostCtx {
     fn read_boot_id() -> std::io::Result<String> {
         let content = fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
         Ok(content.trim().to_string())
+    }
+}
+
+/// Type alias for backwards compatibility
+pub type HostInfo = HostCtx;
+
+impl HostInfo {
+    /// Alias for HostCtx::new()
+    pub fn collect() -> Self {
+        HostCtx::new()
     }
 }
 

@@ -474,7 +474,7 @@ impl LinuxSignalEngine {
         self.ssh_events.push(snap);
     }
 
-    fn handle_network(&mut self, event: &Event, now: i64, _signals: &mut Vec<SignalResult>) {
+    fn handle_network(&mut self, event: &Event, now: i64, _signals: &mut [SignalResult]) {
         let pid = event
             .fields
             .get("pid")
@@ -508,10 +508,7 @@ impl LinuxSignalEngine {
         };
 
         if pid > 0 {
-            self.net_by_pid
-                .entry(pid)
-                .or_insert_with(Vec::new)
-                .push(snap);
+            self.net_by_pid.entry(pid).or_default().push(snap);
         }
     }
 

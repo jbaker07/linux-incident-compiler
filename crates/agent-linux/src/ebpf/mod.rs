@@ -16,7 +16,10 @@ pub use config::EbpfConfig;
 pub use fixtures::{gen_ebpf_events_bin, gen_valid_ebpf_events_bin};
 pub use metrics::{EbpfMetrics, MetricsCollector};
 pub use mock_stream::MockEbpfStream;
-pub use reader::{decode_ebpf_event, EbpfReader, ReaderConfig};
+pub use reader::{
+    decode_ebpf_event, get_events_dropped_kernel, get_events_read_total, get_queue_depth,
+    get_queue_dropped_total, record_kernel_drop, EbpfReader, ReaderConfig,
+};
 pub use transport::{
     select_ebpf_stream, write_protected_pid, EbpfEventStream, LossMetrics, RawEbpfEvent,
     TransportKind,

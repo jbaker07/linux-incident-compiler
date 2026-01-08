@@ -8,6 +8,7 @@ description = "Linux eBPF capture agent for incident compilation"
 [[bin]]
 name = "capture_linux_rotating"
 path = "src/bin/capture_linux_rotating.rs"
+required-features = ["with-ebpf-load"]
 
 [dependencies]
 edr-core = { path = "../core" }
@@ -27,10 +28,13 @@ env_logger = "0.11"
 clap = { version = "4.4", features = ["derive"] }
 ctrlc = "3.4"
 tempfile = "3.10"
+hostname = "0.4"
+crossbeam-channel = "0.5"
 
 # Linux-specific dependencies
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.22", optional = true }
+aya = { version = "0.12", optional = true }
 libc = "0.2"
 nix = { version = "0.27", features = ["user", "process", "signal"] }
 procfs = "0.16"
@@ -41,7 +45,7 @@ libc = "0.2"
 
 [features]
 default = []
-with-ebpf = ["libbpf-rs"]
+with-ebpf = ["libbpf-rs", "aya"]
 with-ebpf-load = ["with-ebpf"]
 
 [dev-dependencies]

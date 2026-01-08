@@ -7,10 +7,40 @@
 //!
 //! Multi-OS adapters map native events into this canonical form.
 
+use super::scope::{ExeScopeKey, FileScopeKey, ProcScopeKey, SockScopeKey, UserScopeKey};
+use crate::evidence::EvidencePtr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use super::scope::{ProcScopeKey, UserScopeKey, FileScopeKey, SockScopeKey, ExeScopeKey};
-use crate::evidence::EvidencePtr;
+
+/// Wrapper for f32 that implements Eq and Hash (using bit representation)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct OrderedF32(pub f32);
+
+impl PartialEq for OrderedF32 {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for OrderedF32 {}
+
+impl std::hash::Hash for OrderedF32 {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+
+impl From<f32> for OrderedF32 {
+    fn from(v: f32) -> Self {
+        OrderedF32(v)
+    }
+}
+
+impl From<OrderedF32> for f32 {
+    fn from(v: OrderedF32) -> Self {
+        v.0
+    }
+}
 
 /// Canonical event types (OS-agnostic)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -29,7 +59,7 @@ pub enum CanonicalEventType {
         proc_key: String,
         exit_code: i32,
     },
-    
+
     // Code execution
     Exec {
         proc_key: String,
@@ -47,7 +77,7 @@ pub enum CanonicalEventType {
         is_signed: Option<bool>,
         signer: Option<String>,
     },
-    
+
     // Memory operations
     MemoryProtect {
         proc_key: String,
@@ -70,7 +100,7 @@ pub enum CanonicalEventType {
         target_proc_key: String,
         start_addr: u64,
     },
-    
+
     // File operations
     FileCreate {
         proc_key: String,
@@ -82,7 +112,7 @@ pub enum CanonicalEventType {
         path: String,
         inode: Option<u64>,
         bytes_written: u64,
-        entropy: Option<f32>,
+        entropy: Option<OrderedF32>,
     },
     FileDelete {
         proc_key: String,
@@ -100,7 +130,7 @@ pub enum CanonicalEventType {
         inode: Option<u64>,
         bytes_read: u64,
     },
-    
+
     // Network operations
     SocketCreate {
         proc_key: String,
@@ -134,7 +164,7 @@ pub enum CanonicalEventType {
         query_type: String,
         response_ips: Vec<String>,
     },
-    
+
     // Authentication/Authorization
     Login {
         user_key: String,
@@ -154,7 +184,7 @@ pub enum CanonicalEventType {
         caps_added: Vec<String>,
         caps_removed: Vec<String>,
     },
-    
+
     // Persistence mechanisms
     ServiceInstall {
         proc_key: String,
@@ -186,7 +216,7 @@ pub enum CanonicalEventType {
         schedule: String,
         command: String,
     },
-    
+
     // Registry (Windows-specific but canonical)
     RegistryWrite {
         proc_key: String,
@@ -200,7 +230,7 @@ pub enum CanonicalEventType {
         key_path: String,
         value_name: Option<String>,
     },
-    
+
     // System events
     KernelModuleLoad {
         proc_key: Option<String>,
@@ -212,7 +242,7 @@ pub enum CanonicalEventType {
         proc_key: Option<String>,
         log_name: String,
     },
-    
+
     // IPC
     PtraceAttach {
         source_proc_key: String,
@@ -223,11 +253,12 @@ pub enum CanonicalEventType {
         pipe_name: String,
         operation: String, // create, connect, read, write
     },
-    
+
     // Raw/Unknown (for extensibility)
     Raw {
         event_type: String,
-        fields: HashMap<String, serde_json::Value>,
+        /// JSON-encoded fields (stored as String since HashMap<String, Value> is not Hash)
+        fields_json: String,
     },
 }
 
@@ -236,34 +267,34 @@ pub enum CanonicalEventType {
 pub struct CanonicalEvent {
     /// Unique event ID (deterministic)
     pub event_id: String,
-    
+
     /// Host identifier
     pub host_id: String,
-    
+
     /// Boot ID (for PID reuse protection)
     pub boot_id: String,
-    
+
     /// Timestamp (nanoseconds since epoch)
     pub ts: i64,
-    
+
     /// Event type with payload
     pub event: CanonicalEventType,
-    
+
     /// Primary scope key (derived from event)
     pub primary_scope: ScopeKey,
-    
+
     /// Related scope keys
     pub related_scopes: Vec<ScopeKey>,
-    
+
     /// Evidence pointer to raw record
     pub evidence_ptr: EvidencePtr,
-    
+
     /// Source stream identifier
     pub source_stream: String,
-    
+
     /// OS-specific metadata (for explainability)
     pub os_context: OsContext,
-    
+
     /// Additional fields from raw event
     #[serde(default)]
     pub extra: HashMap<String, serde_json::Value>,
@@ -290,7 +321,7 @@ impl ScopeKey {
             ScopeKey::Exe(k) => k.to_key_string(),
         }
     }
-    
+
     pub fn scope_type(&self) -> &'static str {
         match self {
             ScopeKey::Process(_) => "process",
@@ -307,22 +338,22 @@ impl ScopeKey {
 pub struct OsContext {
     /// OS type
     pub os_type: OsType,
-    
+
     /// Native event type name (for explanation rendering)
     pub native_event_type: String,
-    
+
     /// ETW provider (Windows)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub etw_provider: Option<String>,
-    
+
     /// EndpointSecurity event type (macOS)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub es_event_type: Option<String>,
-    
+
     /// eBPF tracepoint/kprobe (Linux)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ebpf_hook: Option<String>,
-    
+
     /// Audit event type (Linux)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audit_type: Option<String>,
@@ -346,13 +377,16 @@ impl CanonicalEvent {
         segment_id: &str,
         record_index: u64,
     ) -> String {
-        use sha2::{Sha256, Digest};
-        let input = format!("{}|{}|{}|{}|{}", host_id, boot_id, stream_id, segment_id, record_index);
+        use sha2::{Digest, Sha256};
+        let input = format!(
+            "{}|{}|{}|{}|{}",
+            host_id, boot_id, stream_id, segment_id, record_index
+        );
         let mut hasher = Sha256::new();
         hasher.update(input.as_bytes());
         format!("{:x}", hasher.finalize())
     }
-    
+
     /// Extract process key from event if applicable
     pub fn proc_key(&self) -> Option<&str> {
         match &self.event {
@@ -380,8 +414,12 @@ impl CanonicalEvent {
             CanonicalEventType::CronJob { proc_key, .. } => Some(proc_key),
             CanonicalEventType::RegistryWrite { proc_key, .. } => Some(proc_key),
             CanonicalEventType::RegistryDelete { proc_key, .. } => Some(proc_key),
-            CanonicalEventType::RemoteThreadCreate { source_proc_key, .. } => Some(source_proc_key),
-            CanonicalEventType::PtraceAttach { source_proc_key, .. } => Some(source_proc_key),
+            CanonicalEventType::RemoteThreadCreate {
+                source_proc_key, ..
+            } => Some(source_proc_key),
+            CanonicalEventType::PtraceAttach {
+                source_proc_key, ..
+            } => Some(source_proc_key),
             CanonicalEventType::NamedPipe { proc_key, .. } => Some(proc_key),
             CanonicalEventType::KernelModuleLoad { proc_key, .. } => proc_key.as_deref(),
             CanonicalEventType::LogClear { proc_key, .. } => proc_key.as_deref(),
@@ -389,63 +427,68 @@ impl CanonicalEvent {
             CanonicalEventType::Raw { .. } => None,
         }
     }
-    
+
     /// Get event domain for corroboration scoring
     pub fn domain(&self) -> EventDomain {
         match &self.event {
-            CanonicalEventType::ProcessCreate { .. } |
-            CanonicalEventType::ProcessExit { .. } |
-            CanonicalEventType::Exec { .. } |
-            CanonicalEventType::ModuleLoad { .. } => EventDomain::Process,
-            
-            CanonicalEventType::MemoryProtect { .. } |
-            CanonicalEventType::MemoryMap { .. } |
-            CanonicalEventType::RemoteThreadCreate { .. } => EventDomain::Memory,
-            
-            CanonicalEventType::FileCreate { .. } |
-            CanonicalEventType::FileWrite { .. } |
-            CanonicalEventType::FileDelete { .. } |
-            CanonicalEventType::FileRename { .. } |
-            CanonicalEventType::FileRead { .. } => EventDomain::File,
-            
-            CanonicalEventType::SocketCreate { .. } |
-            CanonicalEventType::Connect { .. } |
-            CanonicalEventType::Listen { .. } |
-            CanonicalEventType::Accept { .. } |
-            CanonicalEventType::DnsQuery { .. } => EventDomain::Network,
-            
-            CanonicalEventType::Login { .. } |
-            CanonicalEventType::Logout { .. } |
-            CanonicalEventType::PrivilegeChange { .. } => EventDomain::Auth,
-            
-            CanonicalEventType::ServiceInstall { .. } |
-            CanonicalEventType::ScheduledTask { .. } |
-            CanonicalEventType::LaunchdPlist { .. } |
-            CanonicalEventType::RegistryPersist { .. } |
-            CanonicalEventType::CronJob { .. } => EventDomain::Persist,
-            
-            CanonicalEventType::RegistryWrite { .. } |
-            CanonicalEventType::RegistryDelete { .. } => EventDomain::File, // Registry is like file for scoring
-            
-            CanonicalEventType::KernelModuleLoad { .. } |
-            CanonicalEventType::LogClear { .. } => EventDomain::Tamper,
-            
-            CanonicalEventType::PtraceAttach { .. } |
-            CanonicalEventType::NamedPipe { .. } => EventDomain::Memory, // IPC is memory-adjacent
-            
+            CanonicalEventType::ProcessCreate { .. }
+            | CanonicalEventType::ProcessExit { .. }
+            | CanonicalEventType::Exec { .. }
+            | CanonicalEventType::ModuleLoad { .. } => EventDomain::Process,
+
+            CanonicalEventType::MemoryProtect { .. }
+            | CanonicalEventType::MemoryMap { .. }
+            | CanonicalEventType::RemoteThreadCreate { .. } => EventDomain::Memory,
+
+            CanonicalEventType::FileCreate { .. }
+            | CanonicalEventType::FileWrite { .. }
+            | CanonicalEventType::FileDelete { .. }
+            | CanonicalEventType::FileRename { .. }
+            | CanonicalEventType::FileRead { .. } => EventDomain::File,
+
+            CanonicalEventType::SocketCreate { .. }
+            | CanonicalEventType::Connect { .. }
+            | CanonicalEventType::Listen { .. }
+            | CanonicalEventType::Accept { .. }
+            | CanonicalEventType::DnsQuery { .. } => EventDomain::Network,
+
+            CanonicalEventType::Login { .. }
+            | CanonicalEventType::Logout { .. }
+            | CanonicalEventType::PrivilegeChange { .. } => EventDomain::Auth,
+
+            CanonicalEventType::ServiceInstall { .. }
+            | CanonicalEventType::ScheduledTask { .. }
+            | CanonicalEventType::LaunchdPlist { .. }
+            | CanonicalEventType::RegistryPersist { .. }
+            | CanonicalEventType::CronJob { .. } => EventDomain::Persist,
+
+            CanonicalEventType::RegistryWrite { .. }
+            | CanonicalEventType::RegistryDelete { .. } => EventDomain::File, // Registry is like file for scoring
+
+            CanonicalEventType::KernelModuleLoad { .. } | CanonicalEventType::LogClear { .. } => {
+                EventDomain::Tamper
+            }
+
+            CanonicalEventType::PtraceAttach { .. } | CanonicalEventType::NamedPipe { .. } => {
+                EventDomain::Memory
+            } // IPC is memory-adjacent
+
             CanonicalEventType::Raw { .. } => EventDomain::Unknown,
         }
     }
-    
+
     /// Check if this is a Tier-0 invariant violation candidate
     pub fn is_tier0_candidate(&self) -> bool {
         matches!(
             &self.event,
-            CanonicalEventType::MemoryProtect { is_rwx: true, .. } |
-            CanonicalEventType::RemoteThreadCreate { .. } |
-            CanonicalEventType::PtraceAttach { .. } |
-            CanonicalEventType::KernelModuleLoad { is_signed: Some(false), .. } |
-            CanonicalEventType::LogClear { .. }
+            CanonicalEventType::MemoryProtect { is_rwx: true, .. }
+                | CanonicalEventType::RemoteThreadCreate { .. }
+                | CanonicalEventType::PtraceAttach { .. }
+                | CanonicalEventType::KernelModuleLoad {
+                    is_signed: Some(false),
+                    ..
+                }
+                | CanonicalEventType::LogClear { .. }
         )
     }
 }
@@ -486,7 +529,7 @@ mod tests {
         let id1 = CanonicalEvent::compute_event_id("host1", "boot1", "stream1", "seg1", 100);
         let id2 = CanonicalEvent::compute_event_id("host1", "boot1", "stream1", "seg1", 100);
         assert_eq!(id1, id2);
-        
+
         let id3 = CanonicalEvent::compute_event_id("host1", "boot1", "stream1", "seg1", 101);
         assert_ne!(id1, id3);
     }
@@ -502,9 +545,12 @@ mod tests {
             prot_after: 7,
             is_rwx: true,
         };
-        
+
         // Simulate event check
-        let is_rwx = matches!(rwx_event, CanonicalEventType::MemoryProtect { is_rwx: true, .. });
+        let is_rwx = matches!(
+            rwx_event,
+            CanonicalEventType::MemoryProtect { is_rwx: true, .. }
+        );
         assert!(is_rwx);
     }
 }
