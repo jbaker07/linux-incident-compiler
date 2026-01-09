@@ -127,18 +127,9 @@ impl BackendManager {
             let pid = child.id();
             tracing::info!("Shutting down backend (PID {})...", pid);
 
-            // Try graceful shutdown first (SIGTERM on Unix)
-            #[cfg(unix)]
-            {
-                unsafe {
-                    libc::kill(pid as i32, libc::SIGTERM);
-                }
-            }
-
-            #[cfg(windows)]
-            {
-                // On Windows, just kill it
-                let _ = child.kill();
+            // Try graceful shutdown first (SIGTERM)
+            unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
             }
 
             // Wait briefly for graceful shutdown
@@ -273,14 +264,8 @@ fn find_ui_server_binary() -> Result<PathBuf, String> {
     ];
 
     for candidate in candidates.into_iter().flatten() {
-        let path = if cfg!(windows) && !candidate.extension().is_some_and(|e| e == "exe") {
-            candidate.with_extension("exe")
-        } else {
-            candidate
-        };
-
-        if path.exists() {
-            return Ok(path.canonicalize().unwrap_or(path));
+        if candidate.exists() {
+            return Ok(candidate.canonicalize().unwrap_or(candidate));
         }
     }
 

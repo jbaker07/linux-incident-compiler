@@ -44,10 +44,7 @@ quick-xml = "0.37"
 sha2 = "0.10"
 zip = "2"
 
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }
-
-[target.'cfg(unix)'.dependencies]
+# Linux-only dependencies
 libc = "0.2"
 
 [dev-dependencies]

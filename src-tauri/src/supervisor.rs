@@ -1,16 +1,11 @@
 //! EDR Stack Supervisor - Manages capture, locald, and server processes
 //!
-//! This module provides a unified supervisor for the entire EDR stack:
-//!
-//! On Linux:
+//! This module provides a unified supervisor for the Linux EDR stack:
 //! - capture_linux_rotating: eBPF/audit telemetry capture
 //! - edr-locald: Fact extraction and playbook matching
 //! - edr-server: HTTP API and UI server
 //!
-//! On Windows:
-//! - capture_windows_rotating.exe: Windows event telemetry capture
-//! - edr-locald.exe: Fact extraction and playbook matching
-//! - edr-server.exe: HTTP API and UI server
+//! NOTE: This is the Linux-only version. For Windows, see windows-incident-compiler.
 //!
 //! Features:
 //! - Admin detection with graceful degradation
@@ -58,12 +53,7 @@ impl ProcessKind {
 
     pub fn binary_name(&self) -> &'static str {
         match self {
-            #[cfg(target_os = "linux")]
             ProcessKind::Capture => "capture_linux_rotating",
-            #[cfg(target_os = "windows")]
-            ProcessKind::Capture => "capture_windows_rotating",
-            #[cfg(target_os = "macos")]
-            ProcessKind::Capture => "capture_macos_rotating",
             ProcessKind::Locald => "edr-locald",
             ProcessKind::Server => "edr-server",
         }
@@ -195,16 +185,9 @@ impl ManagedProcess {
     }
 }
 
-/// Get the OS-specific playbooks subdirectory name
+/// Get the playbooks subdirectory name (Linux-only)
 fn playbooks_subdir() -> &'static str {
-    #[cfg(target_os = "linux")]
-    { "linux" }
-    #[cfg(target_os = "windows")]
-    { "windows" }
-    #[cfg(target_os = "macos")]
-    { "macos" }
-    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-    { "generic" }
+    "linux"
 }
 
 /// The EDR Stack Supervisor
@@ -722,8 +705,8 @@ impl Supervisor {
             "run_id": run_id,
             "timestamp": chrono::Local::now().to_rfc3339(),
             "host": hostname::get().map(|h| h.to_string_lossy().to_string()).unwrap_or_default(),
-            "os": "Windows",
-            "os_version": get_windows_version(),
+            "os": "Linux",
+            "os_version": get_os_version(),
             "arch": std::env::consts::ARCH,
             
             "environment": {
@@ -933,16 +916,16 @@ impl Supervisor {
         self.run_dir.clone()
     }
 
-    /// Perform readiness checks
+    /// Perform readiness checks (Linux)
     pub fn get_readiness(&self) -> ReadinessCheck {
         let is_admin = self.is_admin;
-        let can_read_security_log = check_security_log_access();
-        let (sysmon_installed, sysmon_version) = check_sysmon();
+        let can_read_security_log = check_audit_log_access();
+        let (auditd_installed, auditd_version) = check_auditd();
         let audit_policy_state = check_audit_policy();
-        let powershell_logging_enabled = check_powershell_logging();
+        let shell_logging_enabled = check_shell_logging();
         
         // Determine overall readiness level
-        let overall_readiness = if is_admin && can_read_security_log && sysmon_installed && audit_policy_state.process_creation {
+        let overall_readiness = if is_admin && can_read_security_log && auditd_installed && audit_policy_state.process_creation {
             ReadinessLevel::Full
         } else if is_admin && can_read_security_log {
             ReadinessLevel::Good
@@ -957,21 +940,21 @@ impl Supervisor {
         
         if !is_admin {
             recommended_fixes.push(ReadinessFix {
-                id: "run_as_admin".to_string(),
-                title: "Run as Administrator".to_string(),
-                description: "Run the application as Administrator to access Security event log and advanced telemetry.".to_string(),
-                command: None,
+                id: "run_as_root".to_string(),
+                title: "Run as root".to_string(),
+                description: "Run the application as root to access audit logs and eBPF telemetry.".to_string(),
+                command: Some("sudo ./edr-desktop".to_string()),
                 requires_admin: false,
-                impact: "Enables Security log access and full process telemetry".to_string(),
+                impact: "Enables audit log access and full process telemetry".to_string(),
             });
         }
         
-        if !sysmon_installed {
+        if !auditd_installed {
             recommended_fixes.push(ReadinessFix {
-                id: "install_sysmon".to_string(),
-                title: "Install Sysmon".to_string(),
-                description: "Install Microsoft Sysmon for enhanced process, network, and file telemetry.".to_string(),
-                command: Some("sysmon64.exe -accepteula -i".to_string()),
+                id: "install_auditd".to_string(),
+                title: "Install auditd".to_string(),
+                description: "Install auditd for enhanced process, network, and file telemetry.".to_string(),
+                command: Some("sudo apt install auditd && sudo systemctl enable auditd".to_string()),
                 requires_admin: true,
                 impact: "Enables detailed process creation, network connections, file operations".to_string(),
             });
@@ -979,33 +962,33 @@ impl Supervisor {
         
         if !audit_policy_state.command_line_logging {
             recommended_fixes.push(ReadinessFix {
-                id: "enable_cmdline".to_string(),
-                title: "Enable Command Line Logging".to_string(),
-                description: "Enable process command line logging in audit policy.".to_string(),
-                command: Some("reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\Audit\" /v ProcessCreationIncludeCmdLine_Enabled /t REG_DWORD /d 1 /f".to_string()),
+                id: "enable_execve_audit".to_string(),
+                title: "Enable execve Auditing".to_string(),
+                description: "Enable process execution auditing with command line capture.".to_string(),
+                command: Some("sudo auditctl -a always,exit -F arch=b64 -S execve -k exec_log".to_string()),
                 requires_admin: true,
                 impact: "Captures full command line arguments for process creation events".to_string(),
             });
         }
         
-        if !powershell_logging_enabled {
+        if !shell_logging_enabled {
             recommended_fixes.push(ReadinessFix {
-                id: "enable_ps_logging".to_string(),
-                title: "Enable PowerShell Script Block Logging".to_string(),
-                description: "Enable PowerShell script block and module logging.".to_string(),
-                command: Some("reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging\" /v EnableScriptBlockLogging /t REG_DWORD /d 1 /f".to_string()),
-                requires_admin: true,
-                impact: "Captures PowerShell script content for detection".to_string(),
+                id: "enable_shell_history".to_string(),
+                title: "Enable Shell History Logging".to_string(),
+                description: "Ensure HISTFILE is set for shell command history.".to_string(),
+                command: Some("export HISTFILE=~/.bash_history && export HISTSIZE=10000".to_string()),
+                requires_admin: false,
+                impact: "Captures shell command history for detection".to_string(),
             });
         }
         
         ReadinessCheck {
             is_admin,
             can_read_security_log,
-            sysmon_installed,
-            sysmon_version,
+            sysmon_installed: auditd_installed,
+            sysmon_version: auditd_version,
             audit_policy_state,
-            powershell_logging_enabled,
+            powershell_logging_enabled: shell_logging_enabled,
             recommended_fixes,
             overall_readiness,
         }
@@ -1132,129 +1115,47 @@ impl Drop for Supervisor {
 // Helper functions
 // ============================================================================
 
-/// Get the telemetry root directory
+/// Get the telemetry root directory (Linux-only)
 fn get_telemetry_root() -> PathBuf {
     // 1. Check environment variable
     if let Ok(root) = std::env::var("EDR_TELEMETRY_ROOT") {
         return PathBuf::from(root);
     }
 
-    // 2. Use platform-specific data directory
-    #[cfg(target_os = "linux")]
-    {
-        // Linux: ~/.local/share/linux-incident-compiler/telemetry
-        if let Some(data_dir) = dirs::data_dir() {
-            return data_dir
-                .join("linux-incident-compiler")
-                .join("telemetry");
-        }
-        // Fallback to /var/lib/edr on Linux
-        PathBuf::from("/var/lib/edr")
+    // 2. Use Linux XDG data directory: ~/.local/share/linux-incident-compiler/telemetry
+    if let Some(data_dir) = dirs::data_dir() {
+        return data_dir
+            .join("linux-incident-compiler")
+            .join("telemetry");
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        // Windows: %LOCALAPPDATA%\windows-incident-compiler\telemetry
-        if let Some(local_app_data) = dirs::data_local_dir() {
-            return local_app_data
-                .join("windows-incident-compiler")
-                .join("telemetry");
-        }
-        // Fallback to C:\ProgramData\edr
-        PathBuf::from("C:\\ProgramData\\edr")
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        // macOS: ~/Library/Application Support/incident-compiler/telemetry
-        if let Some(data_dir) = dirs::data_dir() {
-            return data_dir
-                .join("incident-compiler")
-                .join("telemetry");
-        }
-        PathBuf::from("/var/lib/edr")
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-    {
-        if let Some(data_dir) = dirs::data_dir() {
-            return data_dir.join("edr").join("telemetry");
-        }
-        PathBuf::from("./telemetry")
-    }
+    // 3. Fallback to /var/lib/edr
+    PathBuf::from("/var/lib/edr")
 }
 
-/// Check if running with elevated privileges (Windows)
+/// Check if running with elevated privileges (root on Linux)
 fn is_elevated() -> bool {
-    #[cfg(windows)]
-    {
-        use std::mem::MaybeUninit;
-        use std::ptr;
-
-        unsafe {
-            use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-            use windows_sys::Win32::Security::{
-                GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
-            };
-            use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-
-            let mut token_handle: HANDLE = ptr::null_mut();
-            let current_process = GetCurrentProcess();
-
-            if OpenProcessToken(current_process, TOKEN_QUERY, &mut token_handle) == 0 {
-                return false;
-            }
-
-            let mut elevation = MaybeUninit::<TOKEN_ELEVATION>::uninit();
-            let mut return_length: u32 = 0;
-
-            let result = GetTokenInformation(
-                token_handle,
-                TokenElevation,
-                elevation.as_mut_ptr() as *mut _,
-                std::mem::size_of::<TOKEN_ELEVATION>() as u32,
-                &mut return_length,
-            );
-
-            CloseHandle(token_handle);
-
-            if result == 0 {
-                return false;
-            }
-
-            elevation.assume_init().TokenIsElevated != 0
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        // On non-Windows, check if root
-        unsafe { libc::geteuid() == 0 }
-    }
+    // Check if running as root
+    unsafe { libc::geteuid() == 0 }
 }
 
-/// Find a binary in standard locations
+/// Find a binary in standard locations (Linux-only)
 fn find_binary(kind: ProcessKind) -> Result<PathBuf, String> {
     let binary_name = kind.binary_name();
-    let exe_name = if cfg!(windows) {
-        format!("{}.exe", binary_name)
-    } else {
-        binary_name.to_string()
-    };
 
     // Search locations in order
     let candidates: Vec<PathBuf> = vec![
         // 1. Same directory as this executable (bundled)
         std::env::current_exe()
             .ok()
-            .and_then(|p| p.parent().map(|p| p.join(&exe_name)))
+            .and_then(|p| p.parent().map(|p| p.join(binary_name)))
             .unwrap_or_default(),
         // 2. target/release (development)
-        PathBuf::from("target/release").join(&exe_name),
+        PathBuf::from("target/release").join(binary_name),
         // 3. target/debug (development)
-        PathBuf::from("target/debug").join(&exe_name),
+        PathBuf::from("target/debug").join(binary_name),
         // 4. Current directory
-        PathBuf::from(&exe_name),
+        PathBuf::from(binary_name),
     ];
 
     for candidate in candidates {
@@ -1269,17 +1170,17 @@ fn find_binary(kind: ProcessKind) -> Result<PathBuf, String> {
     ))
 }
 
-/// Find the playbooks directory (OS-specific)
+/// Find the playbooks directory (Linux-only, fails loudly if missing)
 fn find_playbooks_dir() -> Result<PathBuf, String> {
-    let subdir = playbooks_subdir();
+    let subdir = playbooks_subdir(); // Always "linux"
 
     let candidates = vec![
-        // 1. Same dir as exe / playbooks/<os>
+        // 1. Same dir as exe / playbooks/linux
         std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|p| p.join("playbooks").join(subdir)))
             .unwrap_or_default(),
-        // 2. Repo playbooks/<os> (development)
+        // 2. Repo playbooks/linux (development)
         PathBuf::from("playbooks").join(subdir),
         // 3. Relative to current dir
         std::env::current_dir()
@@ -1288,13 +1189,18 @@ fn find_playbooks_dir() -> Result<PathBuf, String> {
             .unwrap_or_default(),
     ];
 
-    for candidate in candidates {
+    for candidate in &candidates {
         if candidate.exists() && candidate.is_dir() {
-            return Ok(candidate);
+            return Ok(candidate.clone());
         }
     }
 
-    Err("Could not find playbooks directory".into())
+    Err(format!(
+        "FATAL: Could not find playbooks/linux directory. \
+         Searched: {:?}. \
+         Ensure playbooks/linux exists with YAML playbook files.",
+        candidates
+    ))
 }
 
 /// Count segment files
@@ -1648,165 +1554,96 @@ async fn fetch_explainability_stats(api_base_url: &str) -> ExplainabilityStats {
     ExplainabilityStats::default()
 }
 
-/// Get Windows version string
-fn get_windows_version() -> String {
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        Command::new("cmd")
-            .args(["/c", "ver"])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|| "Windows".to_string())
-    }
-    #[cfg(not(windows))]
-    {
-        "Non-Windows".to_string()
-    }
+/// Get Linux kernel/OS version string
+fn get_os_version() -> String {
+    use std::process::Command;
+    Command::new("uname")
+        .args(["-rs"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| "Linux".to_string())
 }
 
-/// Check if we can read the Security event log
-fn check_security_log_access() -> bool {
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        // Try to query Security log - will fail without admin
-        let result = Command::new("wevtutil")
-            .args(["qe", "Security", "/c:1", "/rd:true", "/f:text"])
-            .output();
-        
-        match result {
-            Ok(output) => output.status.success(),
-            Err(_) => false,
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
-}
-
-/// Check if Sysmon is installed and get version
-fn check_sysmon() -> (bool, Option<String>) {
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        
-        // Check if Sysmon service exists
-        let result = Command::new("sc")
-            .args(["query", "Sysmon64"])
-            .output()
-            .or_else(|_| Command::new("sc").args(["query", "Sysmon"]).output());
-            
-        match result {
-            Ok(output) if output.status.success() => {
-                // Try to get version
-                let version = Command::new("reg")
-                    .args(["query", "HKLM\\SYSTEM\\CurrentControlSet\\Services\\SysmonDrv", "/v", "ImagePath"])
-                    .output()
-                    .ok()
-                    .and_then(|o| {
-                        let stdout = String::from_utf8_lossy(&o.stdout);
-                        // Extract version from path if possible
-                        if stdout.contains("Sysmon") {
-                            Some("installed".to_string())
-                        } else {
-                            None
-                        }
-                    });
-                (true, version)
-            }
-            _ => (false, None),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        (false, None)
-    }
-}
-
-/// Check audit policy state
-fn check_audit_policy() -> AuditPolicyState {
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        
-        // Check process creation auditing
-        let process_creation = Command::new("auditpol")
-            .args(["/get", "/subcategory:Process Creation"])
-            .output()
-            .map(|o| {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                stdout.contains("Success") || stdout.contains("Failure")
-            })
-            .unwrap_or(false);
-        
-        // Check if command line logging is enabled
-        let command_line = Command::new("reg")
-            .args(["query", "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\Audit", "/v", "ProcessCreationIncludeCmdLine_Enabled"])
-            .output()
-            .map(|o| {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                stdout.contains("0x1")
-            })
-            .unwrap_or(false);
-        
-        // Check logon auditing
-        let logon_events = Command::new("auditpol")
-            .args(["/get", "/subcategory:Logon"])
-            .output()
-            .map(|o| {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                stdout.contains("Success") || stdout.contains("Failure")
-            })
-            .unwrap_or(false);
-        
-        AuditPolicyState {
-            process_creation,
-            command_line_logging: command_line,
-            logon_events,
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        AuditPolicyState {
-            process_creation: false,
-            command_line_logging: false,
-            logon_events: false,
-        }
-    }
-}
-
-/// Check if PowerShell script block logging is enabled
-fn check_powershell_logging() -> bool {
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        
-        Command::new("reg")
-            .args(["query", "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging", "/v", "EnableScriptBlockLogging"])
-            .output()
-            .map(|o| {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                stdout.contains("0x1")
-            })
+/// Check if we can read audit logs (Linux)
+fn check_audit_log_access() -> bool {
+    // Check if /var/log/audit/audit.log is readable
+    std::path::Path::new("/var/log/audit/audit.log").exists()
+        && std::fs::metadata("/var/log/audit/audit.log")
+            .map(|m| !m.permissions().readonly())
             .unwrap_or(false)
-    }
-    #[cfg(not(windows))]
-    {
-        false
+}
+
+/// Check if auditd is running (Linux equivalent of Sysmon check)
+fn check_auditd() -> (bool, Option<String>) {
+    use std::process::Command;
+    
+    // Check if auditd service is running
+    let result = Command::new("systemctl")
+        .args(["is-active", "auditd"])
+        .output();
+        
+    match result {
+        Ok(output) if output.status.success() => {
+            // Get version
+            let version = Command::new("auditd")
+                .args(["--version"])
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+            (true, version)
+        }
+        _ => (false, None),
     }
 }
 
-/// Try to find which process is holding a port (Windows only, best effort)
-#[cfg(windows)]
+/// Check audit policy state (Linux: check audit rules)
+fn check_audit_policy() -> AuditPolicyState {
+    use std::process::Command;
+    
+    // Check if execve auditing is enabled
+    let process_creation = Command::new("auditctl")
+        .args(["-l"])
+        .output()
+        .map(|o| {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout.contains("execve") || stdout.contains("exec")
+        })
+        .unwrap_or(false);
+    
+    // Check if command line logging is enabled (always true if execve is audited)
+    let command_line = process_creation;
+    
+    // Check if login auditing is enabled
+    let logon_events = Command::new("auditctl")
+        .args(["-l"])
+        .output()
+        .map(|o| {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout.contains("pam") || stdout.contains("login") || stdout.contains("sshd")
+        })
+        .unwrap_or(false);
+    
+    AuditPolicyState {
+        process_creation,
+        command_line_logging: command_line,
+        logon_events,
+    }
+}
+
+/// Check if detailed bash/shell logging is enabled
+fn check_shell_logging() -> bool {
+    // Check if HISTFILE is set and bash PROMPT_COMMAND logging is enabled
+    std::env::var("HISTFILE").is_ok()
+}
+
+/// Try to find which process is holding a port (Linux)
 fn get_port_holder(port: u16) -> Option<u32> {
     use std::process::Command;
     
-    // Use netstat to find the process holding the port
-    let output = Command::new("netstat")
-        .args(["-ano", "-p", "TCP"])
+    // Use ss or lsof to find the process holding the port
+    let output = Command::new("ss")
+        .args(["-tlnp"])
         .output()
         .ok()?;
     
@@ -1814,17 +1651,19 @@ fn get_port_holder(port: u16) -> Option<u32> {
     let port_str = format!(":{}", port);
     
     for line in stdout.lines() {
-        if line.contains(&port_str) && line.contains("LISTENING") {
-            // Last column is PID
-            let pid: u32 = line.split_whitespace().last()?.parse().ok()?;
-            return Some(pid);
+        if line.contains(&port_str) {
+            // Extract PID from pid=NNNN pattern
+            if let Some(pid_start) = line.find("pid=") {
+                let pid_str: String = line[pid_start + 4..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if let Ok(pid) = pid_str.parse() {
+                    return Some(pid);
+                }
+            }
         }
     }
-    None
-}
-
-#[cfg(not(windows))]
-fn get_port_holder(_port: u16) -> Option<u32> {
     None
 }
 

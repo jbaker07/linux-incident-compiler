@@ -1,17 +1,17 @@
-//! EDR Desktop Application - Tauri supervisor for Windows EDR stack
+//! EDR Desktop Application - Tauri supervisor for Linux EDR stack
 //!
 //! This app:
-//! - Launches and supervises capture, locald, and server processes
+//! - Launches and supervises capture_linux_rotating, edr-locald, and edr-server
 //! - Provides mission-first UI with time window controls
 //! - Auto-stops after configured duration
-//! - Handles admin/non-admin gracefully (limited telemetry mode)
+//! - Handles root/non-root gracefully (limited telemetry mode)
 //! - Writes Metrics v3.1 GROUNDED artifacts with health gates on completion
 //! - Per-run telemetry structure: runs/<run_id>/{segments,logs,metrics}
-//! - Readiness checks: admin, security log, sysmon, audit policy
+//! - Readiness checks: root, audit log, auditd, eBPF
 //! - Scenario profiles with expected outcomes for validation testing
 //! - 4-gate GROUNDED health validation: Telemetry, Extraction, Detection, Explainability
-
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+//!
+//! NOTE: This is the Linux-only version. For Windows, see windows-incident-compiler.
 
 mod grounded_gates;
 mod health_gates;
