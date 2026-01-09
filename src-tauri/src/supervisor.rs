@@ -194,6 +194,7 @@ fn playbooks_subdir() -> &'static str {
 pub struct Supervisor {
     port: u16,
     telemetry_root: PathBuf,
+    playbooks_dir: PathBuf,
     processes: HashMap<ProcessKind, ManagedProcess>,
     is_admin: bool,
     run_config: Option<RunConfig>,
@@ -208,22 +209,27 @@ impl Supervisor {
     pub async fn new() -> Result<Self, String> {
         let port = 3000; // Fixed port for consistency
 
-        // Determine telemetry root: prefer %LOCALAPPDATA%\windows-incident-compiler\telemetry
+        // Determine telemetry root for runs/logs/db
         let telemetry_root = get_telemetry_root();
+
+        // Find playbooks source directory (read-only, no copying)
+        let playbooks_dir = find_playbooks_dir()?;
 
         // Check if running as admin
         let is_admin = is_elevated();
 
         tracing::info!(
-            "Supervisor initialized: port={}, telemetry_root={:?}, is_admin={}",
+            "Supervisor initialized: port={}, telemetry_root={:?}, playbooks_dir={:?}, is_admin={}",
             port,
             telemetry_root,
+            playbooks_dir,
             is_admin
         );
 
         Ok(Self {
             port,
             telemetry_root,
+            playbooks_dir,
             processes: HashMap::new(),
             is_admin,
             run_config: None,
@@ -234,12 +240,13 @@ impl Supervisor {
         })
     }
 
-    /// Initialize directories and copy playbooks
+    /// Initialize directories (playbooks are read from source, not copied)
     pub fn init_directories(&self) -> Result<(), String> {
         // Create base directory structure (shared across runs)
+        // Note: playbooks are NOT copied here - they're read directly from playbooks_dir
         let base_dirs = [
             self.telemetry_root.join("runs"),
-            self.telemetry_root.join("playbooks").join(playbooks_subdir()),
+            self.telemetry_root.join("logs"),
         ];
 
         for dir in &base_dirs {
@@ -247,10 +254,8 @@ impl Supervisor {
                 .map_err(|e| format!("Failed to create directory {:?}: {}", dir, e))?;
         }
 
-        // Copy playbooks from repo if available
-        self.copy_playbooks()?;
-
         tracing::info!("Initialized base directories at {:?}", self.telemetry_root);
+        tracing::info!("Playbooks source: {:?} (read-only)", self.playbooks_dir);
         Ok(())
     }
 
@@ -275,28 +280,27 @@ impl Supervisor {
         Ok(run_dir)
     }
 
-    /// Copy playbooks from the repo to telemetry root
-    fn copy_playbooks(&self) -> Result<(), String> {
-        // Find playbooks directory relative to exe or in known locations
-        let playbooks_source = find_playbooks_dir()?;
-        let playbooks_dest = self.telemetry_root.join("playbooks").join(playbooks_subdir());
+    /// Get the playbooks directory (source of truth, read-only)
+    pub fn playbooks_dir(&self) -> &Path {
+        &self.playbooks_dir
+    }
 
-        let entries = fs::read_dir(&playbooks_source)
+    /// List available playbooks from source directory
+    pub fn list_playbooks(&self) -> Result<Vec<String>, String> {
+        let entries = fs::read_dir(&self.playbooks_dir)
             .map_err(|e| format!("Failed to read playbooks dir: {}", e))?;
 
-        let mut copied = 0;
+        let mut playbooks = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
-                let dest = playbooks_dest.join(entry.file_name());
-                fs::copy(&path, &dest)
-                    .map_err(|e| format!("Failed to copy playbook {:?}: {}", path, e))?;
-                copied += 1;
+                if let Some(name) = path.file_stem() {
+                    playbooks.push(name.to_string_lossy().into_owned());
+                }
             }
         }
-
-        tracing::info!("Copied {} playbooks to {:?}", copied, playbooks_dest);
-        Ok(())
+        playbooks.sort();
+        Ok(playbooks)
     }
 
     /// Start a mission run with the given config
@@ -417,7 +421,7 @@ impl Supervisor {
 
         let mut cmd = Command::new(&binary_path);
         cmd.env("EDR_TELEMETRY_ROOT", run_dir)
-            .env("EDR_PLAYBOOKS_DIR", self.telemetry_root.join("playbooks").join(playbooks_subdir()))
+            .env("EDR_PLAYBOOKS_DIR", &self.playbooks_dir)
             .stdout(Stdio::from(stdout_file))
             .stderr(Stdio::from(stderr_file));
 

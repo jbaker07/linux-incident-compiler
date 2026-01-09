@@ -1,0 +1,53 @@
+# Cargo.toml additions for cargo-deb packaging
+# Add this configuration to the relevant crates
+
+# ═══════════════════════════════════════════════════════════════════════════
+# For crates/server/server/Cargo.toml - add at the end:
+# ═══════════════════════════════════════════════════════════════════════════
+[package.metadata.deb]
+name = "linux-incident-compiler"
+maintainer = "EDR Team <support@example.com>"
+copyright = "2024 EDR Team"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+Linux Incident Compiler - Security incident detection and documentation.
+
+This package provides the core EDR (Endpoint Detection and Response) 
+services for Linux systems:
+- edr-server: HTTP API server for workbench
+- edr-locald: Local detection daemon  
+- capture_linux_rotating: Telemetry capture agent
+
+Supports Ubuntu 22.04+, Debian 12+, and compatible distributions.
+"""
+depends = "$auto, libssl3 (>= 3.0.0)"
+section = "admin"
+priority = "optional"
+assets = [
+    # Binaries
+    ["target/release/edr-server", "opt/edr/bin/", "755"],
+    ["target/release/edr-locald", "opt/edr/bin/", "755"],
+    ["target/release/capture_linux_rotating", "opt/edr/bin/", "755"],
+    
+    # Systemd units
+    ["systemd/edr-server.service", "lib/systemd/system/", "644"],
+    ["systemd/edr-locald.service", "lib/systemd/system/", "644"],
+    ["systemd/edr-capture.service", "lib/systemd/system/", "644"],
+    ["systemd/edr-capture-caps.service", "lib/systemd/system/", "644"],
+    ["systemd/edr.target", "lib/systemd/system/", "644"],
+    
+    # Playbooks
+    ["playbooks/linux/*.yaml", "opt/edr/playbooks/linux/", "644"],
+    
+    # Documentation
+    ["README.md", "usr/share/doc/linux-incident-compiler/", "644"],
+    ["docs/INSTALL_LINUX.md", "usr/share/doc/linux-incident-compiler/", "644"],
+]
+maintainer-scripts = "packaging/debian/"
+systemd-units = { enable = false }
+conf-files = ["/opt/edr/playbooks/"]
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Note: The actual metadata is in packaging/deb/Cargo-deb.toml
+# Run: cargo deb --manifest-path packaging/deb/Cargo-deb.toml
+# ═══════════════════════════════════════════════════════════════════════════

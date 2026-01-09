@@ -1,0 +1,24 @@
+#!/bin/bash
+# Post-removal script for linux-incident-compiler package
+set -e
+
+# Reload systemd after unit files are removed
+systemctl daemon-reload
+
+# On purge, remove data directories and user
+if [ "$1" = "purge" ]; then
+    # Remove data directories
+    rm -rf /var/lib/edr
+    rm -rf /opt/edr
+    
+    # Remove user if exists
+    if id -u edr &>/dev/null; then
+        userdel edr 2>/dev/null || true
+        groupdel edr 2>/dev/null || true
+        echo "Removed system user: edr"
+    fi
+    
+    echo "Linux Incident Compiler purged completely"
+fi
+
+#DEBHELPER#

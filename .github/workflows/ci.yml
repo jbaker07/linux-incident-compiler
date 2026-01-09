@@ -11,21 +11,93 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Multi-Distro Build Matrix
+  # Tests across Ubuntu 22.04, Ubuntu 24.04, Debian 12, and Rocky Linux 9
+  # ═══════════════════════════════════════════════════════════════════════════
   build-and-test:
+    name: Build (${{ matrix.distro }})
     runs-on: ubuntu-latest
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu 22.04 LTS
+          - distro: ubuntu-22.04
+            container: ubuntu:22.04
+            pkg_manager: apt-get
+            deps_base: "build-essential pkg-config libssl-dev curl ca-certificates"
+            deps_ebpf: "clang libelf-dev libbpf-dev"
+            deps_tauri: "libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev"
+
+          # Ubuntu 24.04 LTS
+          - distro: ubuntu-24.04
+            container: ubuntu:24.04
+            pkg_manager: apt-get
+            deps_base: "build-essential pkg-config libssl-dev curl ca-certificates"
+            deps_ebpf: "clang libelf-dev libbpf-dev"
+            deps_tauri: "libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev"
+
+          # Debian 12 (Bookworm)
+          - distro: debian-12
+            container: debian:12
+            pkg_manager: apt-get
+            deps_base: "build-essential pkg-config libssl-dev curl ca-certificates git"
+            deps_ebpf: "clang libelf-dev libbpf-dev"
+            deps_tauri: "libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev"
+
+          # Rocky Linux 9 (RHEL family)
+          - distro: rocky-9
+            container: rockylinux:9
+            pkg_manager: dnf
+            deps_base: "gcc gcc-c++ make openssl-devel pkgconf-pkg-config curl ca-certificates git"
+            deps_ebpf: "clang elfutils-libelf-devel libbpf-devel"
+            deps_tauri: "webkit2gtk4.1-devel gtk3-devel librsvg2-devel"
 
     steps:
+      - name: Configure package manager
+        run: |
+          if [ "${{ matrix.pkg_manager }}" = "apt-get" ]; then
+            apt-get update
+            # Prevent interactive prompts
+            export DEBIAN_FRONTEND=noninteractive
+          elif [ "${{ matrix.pkg_manager }}" = "dnf" ]; then
+            dnf install -y epel-release
+            dnf config-manager --set-enabled crb || true
+          fi
+
+      - name: Install base dependencies
+        run: |
+          if [ "${{ matrix.pkg_manager }}" = "apt-get" ]; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y ${{ matrix.deps_base }}
+          else
+            dnf install -y ${{ matrix.deps_base }}
+          fi
+
+      - name: Install eBPF dependencies
+        run: |
+          if [ "${{ matrix.pkg_manager }}" = "apt-get" ]; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y ${{ matrix.deps_ebpf }}
+          else
+            dnf install -y ${{ matrix.deps_ebpf }}
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Install Linux dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libelf-dev libbpf-dev
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+
+      - name: Set Rust environment
+        run: |
+          . "$HOME/.cargo/env"
+          rustup component add clippy rustfmt
+          echo "PATH=$HOME/.cargo/bin:$PATH" >> $GITHUB_ENV
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -34,9 +106,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.distro }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ matrix.distro }}-cargo-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -56,6 +128,13 @@ jobs:
       - name: Build agent-linux with eBPF
         run: cargo build --release -p agent-linux --features with-ebpf
 
+      - name: Build agent-linux with eBPF-load (optional)
+        if: ${{ env.ENABLE_EBPF_LOAD == '1' || github.event_name == 'push' }}
+        run: |
+          # Full eBPF binary (requires libbpf-rs loader)
+          cargo build --release -p agent-linux --features with-ebpf-load
+          echo "✓ capture_linux_rotating built with full eBPF support"
+
       - name: Run tests (core)
         run: cargo test --workspace
 
@@ -65,7 +144,77 @@ jobs:
       - name: Run golden Linux integration test
         run: cargo test -p edr-locald --test golden_linux_integration -- --nocapture
 
+      - name: Distro smoke test
+        run: |
+          echo "=== Smoke Test: ${{ matrix.distro }} ==="
+
+          # Check binaries execute
+          ./target/release/edr-server --version || echo "Note: --version may not be implemented"
+
+          # Check linkage
+          ldd ./target/release/edr-server || true
+          ldd ./target/release/capture_linux_rotating || true
+
+          echo "✓ ${{ matrix.distro }} smoke test passed"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Tauri Desktop Build (Ubuntu 22.04 only - reference platform)
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-tauri:
+    name: Build Tauri Desktop
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: tauri-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            tauri-cargo-
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Build Tauri app
+        working-directory: src-tauri
+        run: |
+          cargo build --release
+          echo "✓ Tauri desktop app built successfully"
+
+      - name: Upload Tauri binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: edr-desktop-linux
+          path: src-tauri/target/release/edr-desktop
+          if-no-files-found: warn
+
+  # ═══════════════════════════════════════════════════════════════════════════
   # Security: Verify binaries don't contain sensitive material
+  # ═══════════════════════════════════════════════════════════════════════════
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest

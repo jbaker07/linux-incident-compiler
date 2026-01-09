@@ -155,35 +155,11 @@ async fn read_log_tail(
     supervisor.read_log_tail(kind, lines.unwrap_or(100))
 }
 
-/// Get list of available playbooks
+/// Get list of available playbooks from source directory
 #[tauri::command]
 async fn get_available_playbooks(state: State<'_, SupervisorState>) -> Result<Vec<String>, String> {
     let supervisor = state.inner.read().await;
-    let playbooks_dir = supervisor
-        .telemetry_root()
-        .join("playbooks")
-        .join("windows");
-
-    if !playbooks_dir.exists() {
-        return Ok(vec![]);
-    }
-
-    let playbooks: Vec<String> = std::fs::read_dir(playbooks_dir)
-        .map_err(|e| format!("Failed to read playbooks: {}", e))?
-        .filter_map(Result::ok)
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "yaml" || ext == "yml")
-        })
-        .filter_map(|e| {
-            e.path()
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-        })
-        .collect();
-
-    Ok(playbooks)
+    supervisor.list_playbooks()
 }
 
 /// Run a safe activity command for test detection generation

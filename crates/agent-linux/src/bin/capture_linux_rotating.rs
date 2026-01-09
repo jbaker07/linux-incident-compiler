@@ -55,7 +55,7 @@ struct Args {
 
 #[cfg(target_os = "linux")]
 fn main() -> anyhow::Result<()> {
-    use agent_linux::ebpf::{EbpfIngest, RingbufReader};
+    use agent_linux::ebpf::{EbpfIngest, RingbufConfig, RingbufReader};
     use agent_linux::host::{ebpf_available, is_root};
 
     let args = Args::parse();
@@ -104,7 +104,7 @@ fn main() -> anyhow::Result<()> {
     // Set up eBPF ringbuf reader
     std::env::set_var("EDR_PIN_PREFIX", &args.pin_prefix);
 
-    let reader_config = agent_linux::ebpf::ringbuf_reader::RingbufConfig {
+    let reader_config = RingbufConfig {
         pin_prefix: args.pin_prefix.clone(),
         poll_ms: 10,
     };

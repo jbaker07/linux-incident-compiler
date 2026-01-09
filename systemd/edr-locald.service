@@ -1,0 +1,58 @@
+# EDR Local Daemon - Telemetry Processing
+# Part of the Linux Incident Compiler stack
+#
+# This service processes captured telemetry, runs playbook matching,
+# and serves the local API for the Tauri UI.
+#
+# Install: sudo cp edr-locald.service /etc/systemd/system/
+# Enable:  sudo systemctl enable edr-locald
+# Start:   sudo systemctl start edr-locald
+
+[Unit]
+Description=EDR Local Processing Daemon
+Documentation=https://github.com/yourorg/linux-incident-compiler
+After=network.target edr-capture.service
+PartOf=edr.target
+Wants=edr-server.service
+
+[Service]
+Type=simple
+ExecStart=/opt/edr/bin/edr-locald
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Runs as regular user - no elevated privileges needed
+User=edr
+Group=edr
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+
+# Read/write access to telemetry and playbooks
+ReadWritePaths=/var/lib/edr
+ReadOnlyPaths=/opt/edr/playbooks
+
+# Environment
+Environment=RUST_LOG=info
+Environment=EDR_TELEMETRY_ROOT=/var/lib/edr/telemetry
+Environment=EDR_PLAYBOOKS_DIR=/opt/edr/playbooks/linux
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=edr-locald
+
+[Install]
+WantedBy=edr.target

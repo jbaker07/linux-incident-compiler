@@ -251,3 +251,179 @@ jobs:
             - Root privileges for capture agent
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Build .deb package (Ubuntu/Debian)
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-deb:
+    name: Build .deb Package
+    runs-on: ubuntu-22.04
+    needs: build-linux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config libssl-dev \
+            libelf-dev libbpf-dev \
+            dpkg-dev fakeroot
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: deb-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build .deb package
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"  # Strip 'v' prefix
+          export VERSION
+          chmod +x packaging/deb/build-deb.sh
+          ./packaging/deb/build-deb.sh
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-incident-compiler-${{ github.ref_name }}-amd64.deb
+          path: target/*.deb
+
+      - name: Add .deb to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/*.deb
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Build .rpm package (Rocky/RHEL)
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-rpm:
+    name: Build .rpm Package
+    runs-on: ubuntu-latest
+    container: rockylinux:9
+    needs: build-linux
+
+    steps:
+      - name: Install build tools
+        run: |
+          dnf install -y epel-release
+          dnf config-manager --set-enabled crb || true
+          dnf install -y \
+            gcc gcc-c++ make openssl-devel pkgconf-pkg-config \
+            elfutils-libelf-devel libbpf-devel \
+            rpm-build rpmdevtools rsync curl ca-certificates git
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        env:
+          RUSTUP_HOME: /usr/local/rustup
+          CARGO_HOME: /usr/local/cargo
+
+      - name: Set Rust environment
+        run: |
+          . "$HOME/.cargo/env"
+          echo "PATH=$HOME/.cargo/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Build .rpm package
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"  # Strip 'v' prefix
+          export VERSION
+          chmod +x packaging/rpm/build-rpm.sh
+          ./packaging/rpm/build-rpm.sh
+
+      - name: Upload .rpm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-incident-compiler-${{ github.ref_name }}.rpm
+          path: target/*.rpm
+
+      - name: Add .rpm to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/*.rpm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Build Tauri Desktop App
+  # ═══════════════════════════════════════════════════════════════════════════
+  build-tauri:
+    name: Build Tauri Desktop
+    runs-on: ubuntu-22.04
+    needs: build-linux
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Tauri dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: tauri-release-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Build Tauri app
+        working-directory: src-tauri
+        run: cargo build --release
+
+      - name: Package Tauri binary
+        run: |
+          VERSION="${{ github.ref_name }}"
+          mkdir -p dist-tauri
+          cp src-tauri/target/release/edr-desktop dist-tauri/ 2>/dev/null || \
+            cp src-tauri/target/release/linux-incident-compiler dist-tauri/edr-desktop
+          tar -czf "edr-desktop-${VERSION}-linux-x64.tar.gz" -C dist-tauri .
+
+      - name: Upload Tauri artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: edr-desktop-${{ github.ref_name }}-linux-x64
+          path: edr-desktop-*.tar.gz
+
+      - name: Add Tauri to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: edr-desktop-*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

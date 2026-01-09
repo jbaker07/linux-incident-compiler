@@ -19,4 +19,4 @@ pub mod ebpf;
 
 // Re-exports
 pub use capture::{CaptureConfig, CaptureWriter, SharedCaptureWriter};
-pub use host::{HostCtx, HostInfo};
+pub use host::{ebpf_available, is_root, HostCtx, HostInfo};

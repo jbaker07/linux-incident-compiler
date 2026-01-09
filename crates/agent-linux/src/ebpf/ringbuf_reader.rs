@@ -5,8 +5,11 @@
 
 #![cfg(target_os = "linux")]
 
+#[cfg(feature = "with-ebpf")]
 use std::sync::Arc;
+#[cfg(feature = "with-ebpf")]
 use std::thread;
+#[cfg(feature = "with-ebpf")]
 use std::time::Duration;
 
 /// Reader configuration
@@ -65,8 +68,8 @@ impl RingbufReader {
         // Open BPF map by path
         let fd = {
             use std::ffi::CString;
-            let cpath = CString::new(map_path.as_str())
-                .map_err(|e| format!("CString error: {}", e))?;
+            let cpath =
+                CString::new(map_path.as_str()).map_err(|e| format!("CString error: {}", e))?;
             let fd = unsafe { sys::bpf_obj_get(cpath.as_ptr()) };
             if fd < 0 {
                 return Err(format!(
@@ -79,11 +82,7 @@ impl RingbufReader {
         };
 
         // Callback wrapper
-        unsafe extern "C" fn rb_callback(
-            ctx: *mut c_void,
-            data: *mut c_void,
-            size: u64,
-        ) -> i32 {
+        unsafe extern "C" fn rb_callback(ctx: *mut c_void, data: *mut c_void, size: u64) -> i32 {
             let cb = &mut *(ctx as *mut Box<dyn FnMut(&[u8]) + Send>);
             let slice = std::slice::from_raw_parts(data as *const u8, size as usize);
             cb(slice);
@@ -146,10 +145,7 @@ impl RingbufReader {
     where
         F: Fn(&[u8]) + Send + 'static,
     {
-        log::warn!(
-            "eBPF feature disabled; cannot subscribe to {}",
-            map_name
-        );
+        log::warn!("eBPF feature disabled; cannot subscribe to {}", map_name);
         Ok(())
     }
 }

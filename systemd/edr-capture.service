@@ -1,0 +1,64 @@
+# EDR Capture Service - Linux Telemetry Collection
+# Part of the Linux Incident Compiler stack
+#
+# This service runs the rotating capture binary that collects telemetry.
+# Two privilege modes are supported:
+#   1. Root mode (simple): runs as root
+#   2. Capabilities mode (recommended): runs as edr user with specific caps
+#
+# Install: sudo cp edr-capture.service /etc/systemd/system/
+# Enable:  sudo systemctl enable edr-capture
+# Start:   sudo systemctl start edr-capture
+
+[Unit]
+Description=EDR Telemetry Capture Service
+Documentation=https://github.com/yourorg/linux-incident-compiler
+After=network.target local-fs.target
+Before=edr-locald.service
+PartOf=edr.target
+Wants=edr-locald.service
+
+[Service]
+Type=simple
+ExecStart=/opt/edr/bin/capture_linux_rotating --output /var/lib/edr/telemetry/segments
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# Read/write access to telemetry directory
+ReadWritePaths=/var/lib/edr
+
+# Capabilities for eBPF (if available) - comment out for core-only mode
+# AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN
+# CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN
+
+# For root mode (default - simpler but less secure)
+User=root
+Group=root
+
+# For capabilities mode (recommended - uncomment and comment out User=root above)
+# User=edr
+# Group=edr
+# AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+# CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_DAC_READ_SEARCH
+
+# Environment
+Environment=RUST_LOG=info
+Environment=EDR_TELEMETRY_ROOT=/var/lib/edr/telemetry
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=edr-capture
+
+[Install]
+WantedBy=edr.target

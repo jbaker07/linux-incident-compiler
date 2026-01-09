@@ -1,0 +1,66 @@
+# EDR Capture Service - Capabilities Mode (Recommended)
+# Part of the Linux Incident Compiler stack
+#
+# This variant runs capture with minimal capabilities instead of full root.
+# Provides better security posture while enabling eBPF capture.
+#
+# Requirements:
+#   - Linux kernel 5.8+ for CAP_BPF
+#   - edr user/group must exist
+#
+# Install: sudo cp edr-capture-caps.service /etc/systemd/system/edr-capture.service
+# Enable:  sudo systemctl enable edr-capture
+# Start:   sudo systemctl start edr-capture
+
+[Unit]
+Description=EDR Telemetry Capture Service (Capabilities Mode)
+Documentation=https://github.com/yourorg/linux-incident-compiler
+After=network.target local-fs.target
+Before=edr-locald.service
+PartOf=edr.target
+Wants=edr-locald.service
+
+[Service]
+Type=simple
+ExecStart=/opt/edr/bin/capture_linux_rotating --output /var/lib/edr/telemetry/segments
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+# Run as dedicated user with specific capabilities
+User=edr
+Group=edr
+
+# Capabilities for eBPF and kernel tracing
+# CAP_BPF: Load and manage eBPF programs (kernel 5.8+)
+# CAP_PERFMON: Access perf events (kernel 5.8+)
+# CAP_SYS_ADMIN: Fallback for older kernels without CAP_BPF
+# CAP_DAC_READ_SEARCH: Read files for provenance
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_NET_ADMIN
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# Read/write access to telemetry directory
+ReadWritePaths=/var/lib/edr
+
+# Required for eBPF
+ReadWritePaths=/sys/fs/bpf
+
+# Environment
+Environment=RUST_LOG=info
+Environment=EDR_TELEMETRY_ROOT=/var/lib/edr/telemetry
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=edr-capture
+
+[Install]
+WantedBy=edr.target

@@ -1,0 +1,21 @@
+# EDR Target - Orchestrates the full EDR stack
+# Part of the Linux Incident Compiler stack
+#
+# This target groups all EDR services for easy management.
+#
+# Usage:
+#   sudo systemctl start edr.target   # Start all services
+#   sudo systemctl stop edr.target    # Stop all services
+#   sudo systemctl status edr.target  # Check status
+#
+# Install: sudo cp edr.target /etc/systemd/system/
+# Enable:  sudo systemctl enable edr.target
+
+[Unit]
+Description=EDR Stack Target
+Documentation=https://github.com/yourorg/linux-incident-compiler
+After=network.target local-fs.target
+Wants=edr-capture.service edr-locald.service edr-server.service
+
+[Install]
+WantedBy=multi-user.target

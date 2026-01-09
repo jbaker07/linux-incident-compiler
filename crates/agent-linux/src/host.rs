@@ -12,6 +12,18 @@ pub struct HostCtx {
     pub boot_id: String,
     pub uid: u32,
     pub gid: u32,
+    pub kernel_version: String,
+}
+
+/// Check if running as root (uid == 0)
+pub fn is_root() -> bool {
+    unsafe { libc::getuid() == 0 }
+}
+
+/// Check if eBPF is likely available on this kernel
+pub fn ebpf_available() -> bool {
+    // Check for bpf() syscall availability via kernel version and /sys/fs/bpf
+    std::path::Path::new("/sys/fs/bpf").exists()
 }
 
 impl Default for HostCtx {
@@ -29,6 +41,7 @@ impl HostCtx {
             .unwrap_or_else(|| "unknown".to_string());
 
         let boot_id = Self::read_boot_id().unwrap_or_else(|_| String::new());
+        let kernel_version = Self::read_kernel_version().unwrap_or_else(|_| "unknown".to_string());
 
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
@@ -38,6 +51,7 @@ impl HostCtx {
             boot_id,
             uid,
             gid,
+            kernel_version,
         }
     }
 
@@ -61,6 +75,17 @@ impl HostCtx {
     fn read_boot_id() -> std::io::Result<String> {
         let content = fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
         Ok(content.trim().to_string())
+    }
+
+    /// Read kernel version from /proc/version or uname
+    fn read_kernel_version() -> std::io::Result<String> {
+        let content = fs::read_to_string("/proc/version")?;
+        // Extract version string (e.g. "5.15.0-164-generic")
+        if let Some(version) = content.split_whitespace().nth(2) {
+            Ok(version.to_string())
+        } else {
+            Ok(content.trim().to_string())
+        }
     }
 }
 

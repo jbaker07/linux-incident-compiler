@@ -66,8 +66,8 @@ pub mod evt {
 #[repr(C, align(8))]
 #[derive(Clone, Copy)]
 pub struct EdREvent {
-    pub ts: u64,           // ktime_ns (nanoseconds)
-    pub type_: u32,        // edr_evt_type
+    pub ts: u64,    // ktime_ns (nanoseconds)
+    pub type_: u32, // edr_evt_type
     pub syscall_id: u32,
 
     pub tgid: u32,
@@ -110,7 +110,8 @@ fn cstr_trunc(bytes: &[u8]) -> String {
 
 /// Convert big-endian IPv4 to dotted string
 fn ipv4_be_to_string(be: u32) -> String {
-    let b = be.to_be_bytes();
+    // The value is already big-endian, use native bytes
+    let b = be.to_ne_bytes();
     format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3])
 }
 
@@ -269,7 +270,7 @@ pub fn edr_event_to_core_event(e: &EdREvent) -> Event {
     if e.fam != 0 {
         fields.insert("fam".into(), serde_json::json!(e.fam));
     }
-    
+
     // Protocol: map numeric value to string for playbook matching
     let protocol = match e.proto {
         6 => "tcp",
@@ -280,7 +281,7 @@ pub fn edr_event_to_core_event(e: &EdREvent) -> Event {
     };
     fields.insert("protocol".into(), serde_json::json!(protocol));
     fields.insert("proto".into(), serde_json::json!(e.proto));
-    
+
     if e.lport != 0 {
         let lport = port_be_to_u16(e.lport);
         fields.insert("local_port".into(), serde_json::json!(lport));

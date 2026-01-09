@@ -1,0 +1,40 @@
+#!/bin/bash
+# Post-installation script for linux-incident-compiler package
+set -e
+
+# Create system user if it doesn't exist
+if ! id -u edr &>/dev/null; then
+    useradd --system --user-group --no-create-home --shell /usr/sbin/nologin edr
+    echo "Created system user: edr"
+fi
+
+# Create runtime directories
+mkdir -p /var/lib/edr/telemetry/segments
+mkdir -p /var/lib/edr/telemetry/runs
+mkdir -p /var/lib/edr/telemetry/db
+mkdir -p /var/lib/edr/logs
+mkdir -p /var/lib/edr/license
+
+# Set ownership
+chown -R edr:edr /var/lib/edr
+
+# Reload systemd
+systemctl daemon-reload
+
+echo "═══════════════════════════════════════════════════════════════"
+echo "Linux Incident Compiler installed successfully!"
+echo ""
+echo "To start the services:"
+echo "  sudo systemctl start edr.target"
+echo ""
+echo "To enable at boot:"
+echo "  sudo systemctl enable edr.target"
+echo ""
+echo "For capabilities-based capture (recommended):"
+echo "  sudo systemctl disable edr-capture.service"
+echo "  sudo setcap cap_bpf,cap_perfmon,cap_sys_admin,cap_dac_read_search=ep \\"
+echo "    /opt/edr/bin/capture_linux_rotating"
+echo "  sudo systemctl enable edr-capture-caps.service"
+echo "═══════════════════════════════════════════════════════════════"
+
+#DEBHELPER#

@@ -1,0 +1,61 @@
+# EDR Server - Web API and Analysis Server
+# Part of the Linux Incident Compiler stack
+#
+# This service provides the HTTP API for incident analysis,
+# license management, and integration with the Tauri UI.
+#
+# Install: sudo cp edr-server.service /etc/systemd/system/
+# Enable:  sudo systemctl enable edr-server
+# Start:   sudo systemctl start edr-server
+
+[Unit]
+Description=EDR Analysis Server
+Documentation=https://github.com/yourorg/linux-incident-compiler
+After=network.target edr-locald.service
+PartOf=edr.target
+
+[Service]
+Type=simple
+ExecStart=/opt/edr/bin/edr-server --port 3000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Runs as regular user - no elevated privileges needed
+User=edr
+Group=edr
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+
+# Read/write access to telemetry
+ReadWritePaths=/var/lib/edr
+ReadOnlyPaths=/opt/edr/playbooks
+
+# Allow binding to port 3000 (unprivileged)
+# For ports < 1024, use AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Environment
+Environment=RUST_LOG=info
+Environment=EDR_TELEMETRY_ROOT=/var/lib/edr/telemetry
+Environment=EDR_PLAYBOOKS_DIR=/opt/edr/playbooks/linux
+Environment=EDR_PORT=3000
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=edr-server
+
+[Install]
+WantedBy=edr.target

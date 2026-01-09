@@ -1,0 +1,26 @@
+#!/bin/bash
+# Pre-removal script for linux-incident-compiler package
+set -e
+
+# Stop services before removal
+if systemctl is-active --quiet edr.target; then
+    systemctl stop edr.target
+    echo "Stopped edr.target"
+fi
+
+if systemctl is-enabled --quiet edr.target 2>/dev/null; then
+    systemctl disable edr.target
+    echo "Disabled edr.target"
+fi
+
+# Stop individual services if running
+for service in edr-server edr-locald edr-capture edr-capture-caps; do
+    if systemctl is-active --quiet "$service.service" 2>/dev/null; then
+        systemctl stop "$service.service"
+    fi
+    if systemctl is-enabled --quiet "$service.service" 2>/dev/null; then
+        systemctl disable "$service.service"
+    fi
+done
+
+#DEBHELPER#
