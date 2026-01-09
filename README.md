@@ -8,17 +8,48 @@ Local-first Endpoint Detection & Response (EDR) workbench for Linux. Captures, a
 - **edr-locald** - Signal detection engine with playbooks and hypothesis correlation
 - **edr-server** - Web UI and REST API server
 
-## Quick Start
+## Quick Start (Linux)
 
 ```bash
-# Build release binaries
+# 1. Build release binaries
 cargo build --release --workspace
 
-# Start the server (requires telemetry data)
-export EDR_TELEMETRY_ROOT=/var/lib/edr/telemetry
+# 2. Set up telemetry directory (requires root for /var/lib)
+export EDR_TELEMETRY_ROOT=/var/lib/edr
+sudo mkdir -p $EDR_TELEMETRY_ROOT/segments
+sudo chown $USER:$USER $EDR_TELEMETRY_ROOT
+
+# 3. Start all three processes (each in its own terminal or use &)
+
+# Terminal 1: Start capture agent (requires root/CAP_BPF for eBPF)
+sudo -E ./target/release/capture_linux_rotating
+
+# Terminal 2: Start signal detection daemon
+./target/release/edr-locald
+
+# Terminal 3: Start web server
 ./target/release/edr-server
 
-# Open http://127.0.0.1:3000
+# 4. Open the web UI
+# http://127.0.0.1:3000
+
+# 5. Verify signals are being detected
+curl http://localhost:3000/api/signals | jq '.data | length'
+```
+
+### Development Mode (non-root testing)
+
+```bash
+# Use /tmp for telemetry (no root required)
+export EDR_TELEMETRY_ROOT=/tmp/edr-test
+mkdir -p $EDR_TELEMETRY_ROOT/segments
+
+# Skip capture agent, run locald + server with test data
+./target/release/edr-locald &
+./target/release/edr-server &
+
+# Seed test telemetry (optional)
+# cp testdata/segments/*.jsonl $EDR_TELEMETRY_ROOT/segments/
 ```
 
 ## Requirements
@@ -26,6 +57,8 @@ export EDR_TELEMETRY_ROOT=/var/lib/edr/telemetry
 - Linux kernel 5.8+ (for eBPF CO-RE)
 - Rust 1.75+
 - Root/CAP_BPF for capture agent
+
+See [docs/TELEMETRY_ENABLEMENT_LINUX.md](docs/TELEMETRY_ENABLEMENT_LINUX.md) for detailed telemetry setup.
 
 ## Licensing
 

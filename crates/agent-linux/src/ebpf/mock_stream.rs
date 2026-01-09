@@ -43,13 +43,14 @@ impl MockEbpfStream {
 }
 
 impl EbpfEventStream for MockEbpfStream {
+    #[allow(unused_assignments)]
     fn poll(&mut self, _timeout_ms: i32) -> Result<Vec<RawEbpfEvent>> {
         // Read up to 100 events (384 bytes each) from fixture
         let read_size = (100 * 384).min(self.buffer.len());
         let n = self.reader.read(&mut self.buffer[..read_size]).unwrap_or(0);
 
         let mut events = Vec::new();
-        #[allow(unused_variables, unused_assignments)]
+        #[allow(unused_variables)]
         let mut decode_failed = 0;
 
         // Parse each 384-byte record

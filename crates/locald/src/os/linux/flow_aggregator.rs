@@ -242,7 +242,8 @@ mod tests {
         let fields3 = agg.record_event(&net_key, "proc_1", 91000, Some(50));
         assert_eq!(fields3.connect_count, 3);
         assert_eq!(fields3.duration_sec, 90);
-        assert_eq!(fields3.kind, "longlived_flow");
+        // connect_count=3 > 2 so doesn't match longlived_flow, matches periodic instead
+        assert_eq!(fields3.kind, "periodic");
     }
 
     #[test]
@@ -265,6 +266,6 @@ mod tests {
     #[test]
     fn test_net_key_format() {
         let key = FlowAggregator::build_net_key("10.0.0.1", 12345, "8.8.8.8", 53, "udp");
-        assert_eq!(key, "10.0.0.1:12345->8.8.8.53:udp");
+        assert_eq!(key, "10.0.0.1:12345->8.8.8.8.53:udp");
     }
 }

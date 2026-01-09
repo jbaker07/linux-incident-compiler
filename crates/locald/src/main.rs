@@ -1,24 +1,34 @@
-//! EDR Locald entry point - Windows signal detection daemon
+//! EDR Locald entry point - Platform-adaptive signal detection daemon
 //!
 //! Pipeline: segments/*.jsonl -> extract_facts -> HypothesisController -> Incidents -> signals table -> edr-server
 //!
 //! This is the FULL detection pipeline that uses:
-//! - PlaybookDef: Windows playbook definitions with slot predicates
-//! - extract_facts: Convert Windows events to canonical Facts
+//! - PlaybookDef: Playbook definitions with slot predicates (loaded from YAML on Linux)
+//! - extract_facts: Convert platform events to canonical Facts
 //! - HypothesisController: Slot matching, TTL, cooldowns, incident promotion
 //! - Signal persistence: Store fired incidents as signals for API
 //! - ExplanationBundle: Full explainability for each signal
 
 use chrono::Utc;
 use edr_core::{Event, EvidencePtr};
+#[cfg(target_os = "windows")]
 use edr_locald::explanation_builder::build_explanation_from_hypothesis;
-use edr_locald::hypothesis::Fact;
 use edr_locald::hypothesis_controller::HypothesisController;
 use edr_locald::load_metrics::{db_metrics, locald_metrics};
-use edr_locald::os::windows::{extract_facts, windows_playbooks, WindowsSignalEngine};
 use edr_locald::scoring::ScoringEngine;
 use edr_locald::signal_result::SignalResult;
 use edr_locald::slot_matcher::PlaybookDef;
+
+// Platform-specific imports - Fact types differ between platforms
+#[cfg(target_os = "linux")]
+use edr_locald::canonical::fact::Fact as CanonicalFact;
+#[cfg(target_os = "linux")]
+use edr_locald::os::linux::{extract_facts, linux_playbooks, LinuxSignalEngine};
+
+#[cfg(target_os = "windows")]
+use edr_locald::hypothesis::Fact;
+#[cfg(target_os = "windows")]
+use edr_locald::os::windows::{extract_facts, windows_playbooks, WindowsSignalEngine};
 use rusqlite::{params, Connection};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -120,6 +130,7 @@ fn parse_segment_record(line: &str, segment_id: u64, record_index: u32) -> Optio
 }
 
 /// Convert an incident to a SignalResult for database persistence
+#[cfg(target_os = "windows")]
 fn incident_to_signal(incident: &edr_locald::hypothesis::Incident, hostname: &str) -> SignalResult {
     use edr_locald::signal_result::EvidenceRef;
 
@@ -239,8 +250,14 @@ fn main() {
     // Initialize HypothesisController (the core of playbook-based detection)
     let mut hypothesis_controller = HypothesisController::new(&hostname);
 
-    // Load Windows playbooks into the controller (and keep a map for explanations)
+    // Load platform-specific playbooks into the controller (and keep a map for explanations)
+    #[cfg(target_os = "linux")]
+    let playbooks = linux_playbooks();
+    #[cfg(target_os = "windows")]
     let playbooks = windows_playbooks();
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let playbooks: Vec<PlaybookDef> = Vec::new();
+
     let playbook_count = playbooks.len();
     let mut playbook_map: HashMap<String, PlaybookDef> = HashMap::new();
     for playbook in playbooks {
@@ -253,12 +270,27 @@ fn main() {
         playbook_map.insert(playbook.playbook_id.clone(), playbook.clone());
         hypothesis_controller.register_playbook(playbook);
     }
+    #[cfg(target_os = "linux")]
+    eprintln!("Loaded {} Linux playbooks from YAML", playbook_count);
+    #[cfg(target_os = "windows")]
     eprintln!("Loaded {} Windows playbooks", playbook_count);
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    eprintln!(
+        "Warning: No playbooks loaded for this platform ({})",
+        std::env::consts::OS
+    );
 
-    // Track facts for explanation building
+    // Track facts for explanation building (platform-specific types)
+    // Note: On Linux, canonical::fact::Fact is used; on Windows, hypothesis::Fact
+    #[cfg(target_os = "linux")]
+    let mut facts_store: Vec<CanonicalFact> = Vec::new();
+    #[cfg(target_os = "windows")]
     let mut facts_store: Vec<Fact> = Vec::new();
 
-    // Initialize legacy WindowsSignalEngine (for WorkflowSeed only if enabled)
+    // Initialize platform-specific signal engine (for WorkflowSeed only if enabled)
+    #[cfg(target_os = "linux")]
+    let mut signal_engine = LinuxSignalEngine::new(hostname.clone());
+    #[cfg(target_os = "windows")]
     let mut signal_engine = WindowsSignalEngine::new(hostname.clone());
 
     // Initialize scoring engine
@@ -300,6 +332,7 @@ fn main() {
     let mut total_events = 0u64;
     let mut total_facts = 0u64;
     let mut total_signals = 0u64;
+    #[cfg(target_os = "windows")]
     let mut incidents_fired: HashSet<String> = HashSet::new();
 
     // Main loop
@@ -357,6 +390,9 @@ fn main() {
                                 segment_facts += facts.len() as u32;
 
                                 // === FULL PIPELINE: Feed Facts to HypothesisController ===
+                                // Note: On Linux, canonical::Fact differs from hypothesis::Fact
+                                // Until unified, Linux uses signal engine directly; Windows uses HypothesisController
+                                #[cfg(target_os = "windows")]
                                 for fact in facts {
                                     // Store fact for explanation building
                                     facts_store.push(fact.clone());
@@ -380,20 +416,29 @@ fn main() {
                                     }
                                 }
 
-                                // === LEGACY: WorkflowSeed signal if enabled ===
-                                if workflow_seed {
-                                    let legacy_signals = signal_engine.process_event(&event);
-                                    for signal in legacy_signals {
-                                        segment_signals += 1;
-                                        let scored = scoring_engine.score(signal.clone());
-                                        persist_signal(&db, &signal, &scored.risk_score);
-                                        eprintln!(
-                                            "  [signal] {} severity={} risk={:.2}",
-                                            scored.signal.signal_type,
-                                            scored.signal.severity,
-                                            scored.risk_score
-                                        );
+                                #[cfg(target_os = "linux")]
+                                {
+                                    // Store facts for potential future use
+                                    for fact in facts {
+                                        facts_store.push(fact);
                                     }
+                                    // TODO: Convert canonical::Fact to hypothesis::Fact for HypothesisController
+                                    // For now, Linux uses signal engine directly
+                                }
+
+                                // === SIGNAL ENGINE: Process events directly ===
+                                // This works on both platforms and generates signals
+                                let engine_signals = signal_engine.process_event(&event);
+                                for signal in engine_signals {
+                                    segment_signals += 1;
+                                    let scored = scoring_engine.score(signal.clone());
+                                    persist_signal(&db, &signal, &scored.risk_score);
+                                    eprintln!(
+                                        "  [signal] {} severity={} risk={:.2}",
+                                        scored.signal.signal_type,
+                                        scored.signal.severity,
+                                        scored.risk_score
+                                    );
                                 }
                             }
                         }
@@ -403,19 +448,25 @@ fn main() {
                         hypothesis_controller.expire_hypotheses();
 
                         // Persist any new incidents as signals with explanations
-                        let all_incidents = hypothesis_controller.all_incidents();
-                        for incident in all_incidents {
-                            if !incidents_fired.contains(&incident.incident_id) {
-                                // Convert incident to signal and persist
-                                let signal = incident_to_signal(incident, &hostname);
-                                segment_signals += 1;
+                        // Note: On Linux, incidents are not yet generated via HypothesisController
+                        // because canonical::Fact differs from hypothesis::Fact.
+                        // Signal engine handles signal generation directly.
+                        #[cfg(target_os = "windows")]
+                        {
+                            let all_incidents = hypothesis_controller.all_incidents();
+                            for incident in all_incidents {
+                                if !incidents_fired.contains(&incident.incident_id) {
+                                    // Convert incident to signal and persist
+                                    let signal = incident_to_signal(incident, &hostname);
+                                    segment_signals += 1;
 
-                                let evidence_json = serde_json::to_string(&signal.evidence_ptrs)
-                                    .unwrap_or_else(|_| "[]".to_string());
-                                let metadata_json = signal.metadata.to_string();
-                                let created_at = Utc::now().to_rfc3339();
+                                    let evidence_json =
+                                        serde_json::to_string(&signal.evidence_ptrs)
+                                            .unwrap_or_else(|_| "[]".to_string());
+                                    let metadata_json = signal.metadata.to_string();
+                                    let created_at = Utc::now().to_rfc3339();
 
-                                let _ = db.execute(
+                                    let _ = db.execute(
                                     "INSERT OR REPLACE INTO signals
                                      (signal_id, signal_type, severity, host, ts, ts_start, ts_end, proc_key, file_key, identity_key, metadata, evidence_ptrs, dropped_evidence_count, created_at)
                                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
@@ -437,58 +488,60 @@ fn main() {
                                     ],
                                 );
 
-                                // === BUILD AND PERSIST EXPLANATION BUNDLE ===
-                                // Find hypothesis that promoted to this incident
-                                if let Some(hyp_id) = incident.promoted_from_hypothesis_ids.first()
-                                {
-                                    if let Some(hypothesis) =
-                                        hypothesis_controller.get_hypothesis(hyp_id)
+                                    // === BUILD AND PERSIST EXPLANATION BUNDLE ===
+                                    // Find hypothesis that promoted to this incident
+                                    if let Some(hyp_id) =
+                                        incident.promoted_from_hypothesis_ids.first()
                                     {
-                                        // Find playbook for this hypothesis
-                                        if let Some(playbook) =
-                                            playbook_map.get(&hypothesis.template_id)
+                                        if let Some(hypothesis) =
+                                            hypothesis_controller.get_hypothesis(hyp_id)
                                         {
-                                            let explanation = build_explanation_from_hypothesis(
-                                                hypothesis,
-                                                incident,
-                                                playbook,
-                                                &telemetry_root,
-                                                &facts_store,
-                                            );
-
-                                            // Persist explanation
-                                            if let Ok(explanation_json) =
-                                                serde_json::to_string(&explanation)
+                                            // Find playbook for this hypothesis
+                                            if let Some(playbook) =
+                                                playbook_map.get(&hypothesis.template_id)
                                             {
-                                                let _ = db.execute(
-                                                    "INSERT OR REPLACE INTO signal_explanations
+                                                let explanation = build_explanation_from_hypothesis(
+                                                    hypothesis,
+                                                    incident,
+                                                    playbook,
+                                                    &telemetry_root,
+                                                    &facts_store,
+                                                );
+
+                                                // Persist explanation
+                                                if let Ok(explanation_json) =
+                                                    serde_json::to_string(&explanation)
+                                                {
+                                                    let _ = db.execute(
+                                                        "INSERT OR REPLACE INTO signal_explanations
                                                      (signal_id, explanation_json, created_at)
                                                      VALUES (?1, ?2, ?3)",
-                                                    params![
-                                                        signal.signal_id,
-                                                        explanation_json,
-                                                        &created_at
-                                                    ],
-                                                );
-                                                eprintln!(
+                                                        params![
+                                                            signal.signal_id,
+                                                            explanation_json,
+                                                            &created_at
+                                                        ],
+                                                    );
+                                                    eprintln!(
                                                     "  [explanation] {} → {} slots, {} evidence",
                                                     signal.signal_id,
                                                     explanation.slots.len(),
                                                     explanation.evidence.len()
                                                 );
+                                                }
                                             }
                                         }
                                     }
+
+                                    eprintln!(
+                                        "  [persisted] {} → {} severity={:?}",
+                                        signal.signal_id, signal.signal_type, incident.severity
+                                    );
+
+                                    incidents_fired.insert(incident.incident_id.clone());
                                 }
-
-                                eprintln!(
-                                    "  [persisted] {} → {} severity={:?}",
-                                    signal.signal_id, signal.signal_type, incident.severity
-                                );
-
-                                incidents_fired.insert(incident.incident_id.clone());
                             }
-                        }
+                        } // end #[cfg(target_os = "windows")]
 
                         // Check active hypotheses for debugging
                         let active = hypothesis_controller.active_hypotheses();

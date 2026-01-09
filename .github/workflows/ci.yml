@@ -62,6 +62,9 @@ jobs:
       - name: Run tests (pro)
         run: cargo test --workspace --features pro
 
+      - name: Run golden Linux integration test
+        run: cargo test -p edr-locald --test golden_linux_integration -- --nocapture
+
   # Security: Verify binaries don't contain sensitive material
   security-scan:
     name: Security Scan

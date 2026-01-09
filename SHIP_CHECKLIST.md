@@ -90,9 +90,17 @@ cargo fmt -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --release
 
-# Linux-specific integration tests
-cargo test --package edr-locald --test golden_linux_integration
+# Linux-specific integration tests (also runs in CI)
+cargo test -p edr-locald --test golden_linux_integration -- --nocapture
 ```
+
+### CI Pipeline Verification
+- [x] **PASS**: `cargo fmt -- --check` runs in CI
+- [x] **PASS**: `cargo clippy` runs in CI
+- [x] **PASS**: `cargo test --workspace` runs in CI
+- [x] **PASS**: `golden_linux_integration` test runs in CI (separate step)
+- [x] **PASS**: Security scan for forbidden patterns runs in CI
+- [x] **PASS**: Artifact allowlist verification runs in CI
 
 ### Build Verification (Linux)
 ```bash
